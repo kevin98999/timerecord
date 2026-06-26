@@ -1,0 +1,15 @@
+Email的问题解决方案
+
+
+
+
+FILES窗口应该允许choose多个文件上传
+siGN IN 窗口中删除Defaults窗口，不要显示Defaults 用户名字和密码
+Profile窗口中，不要显示FOLDER地址
+Presence Summary窗口只显示当天，其他的日期可以在日历中选取
+每天的attendance_records 和view_15_min_summary电子表格只保存当天的记录
+
+把STATISTICS按钮的名字改成Presence Summary
+老板忘记登录密码如何处理
+除了老板账户，其他人不要显示LOGS按钮
+在Edit User窗口，园长也有权力修改自己的登录密码

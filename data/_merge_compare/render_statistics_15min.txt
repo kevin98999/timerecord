@@ -1,0 +1,73 @@
+def render_statistics_15min(user, query):
+    if user["role"] not in {"principal", "boss"}:
+        return html_page("Forbidden", user, '<div class="panel">You are not allowed to view statistics.</div>')
+    selected_date_text = query.get("date", [today_text()])[0]
+    try:
+        selected_date = datetime.strptime(selected_date_text, "%Y-%m-%d").date()
+    except ValueError:
+        selected_date = datetime.now().date()
+    selected_date_text = selected_date.strftime("%Y-%m-%d")
+    selected_month = selected_date.replace(day=1)
+    prev_month = (selected_month - timedelta(days=1)).replace(day=1)
+    next_month = (selected_month + timedelta(days=32)).replace(day=1)
+
+    with connect_db() as conn:
+        rows = attendance_export_source_rows(conn, selected_date_text)
+    summary_rows = build_presence_summary_rows(rows)
+    table_rows = "".join(
+        f"<tr><td>{html.escape(day)}</td><td>{html.escape(time)}</td><td>{present}</td><td>{html.escape(classes)}</td></tr>"
+        for day, time, present, classes in summary_rows
+    )
+
+    calendar_rows = []
+    for week in calendar.Calendar(firstweekday=0).monthdatescalendar(selected_month.year, selected_month.month):
+        cells = []
+        for day in week:
+            day_text = day.strftime("%Y-%m-%d")
+            classes = ["day-cell"]
+            if day.month != selected_month.month:
+                classes.append("out-month")
+            if day_text == selected_date_text:
+                classes.append("selected")
+            if day_text == today_text():
+                classes.append("today")
+            cells.append(
+                f'<td class="{" ".join(classes)}"><a href="/statistics?date={quote(day_text)}">{day.day}</a></td>'
+            )
+        calendar_rows.append(f"<tr>{''.join(cells)}</tr>")
+
+    body = f"""
+    <style>
+      .stats-calendar {{ margin-top: 10px; }}
+      .stats-calendar table {{ width: 100%; border-collapse: collapse; }}
+      .stats-calendar th, .stats-calendar td {{ text-align: center; padding: 6px 4px; border: 1px solid var(--line); }}
+      .stats-calendar td.out-month a {{ color: #aaa; }}
+      .stats-calendar td.today a {{ font-weight: 700; }}
+      .stats-calendar td.selected {{ background: #d7b5ff; }}
+      .stats-calendar td.selected a {{ color: #000; font-weight: 700; }}
+      .stats-calendar td a {{ display: block; text-decoration: none; color: inherit; }}
+      .stats-calendar-nav {{ display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }}
+    </style>
+    <div class="panel">
+      <h2>Presence Summary</h2>
+      <div class="stats-calendar-nav">
+        <a class="btn" href="/statistics?date={quote(prev_month.strftime('%Y-%m-%d'))}">&lt;</a>
+        <div class="muted small">{html.escape(selected_month.strftime('%B %Y'))}</div>
+        <a class="btn" href="/statistics?date={quote(next_month.strftime('%Y-%m-%d'))}">&gt;</a>
+      </div>
+      <div class="stats-calendar">
+        <table>
+          <thead><tr><th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th><th>Sat</th><th>Sun</th></tr></thead>
+          <tbody>{''.join(calendar_rows)}</tbody>
+        </table>
+      </div>
+      <div class="muted small" style="margin-top:10px">Selected date: {html.escape(selected_date_text)}. Child attendance records: {len(rows)}</div>
+      <div class="table-wrap" style="margin-top:10px">
+        <table>
+          <thead><tr><th>Date</th><th>Time</th><th>Children Present</th><th>Class Counts</th></tr></thead>
+          <tbody>{table_rows or '<tr><td colspan="4" class="muted">No child attendance records are available for this date.</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>
+    """
+    return html_page("Presence Summary", user, body)

@@ -1,0 +1,312 @@
+{
+  "versions": [
+    {
+      "version": "v20260624-001",
+      "created_at": "2026-06-24 11:27:59",
+      "note": "baseline after current dashboard and CHILDREN1 photo changes",
+      "archive": ".app_versions/v20260624-001.zip",
+      "file_count": 445
+    },
+    {
+      "version": "v20260624-002",
+      "created_at": "2026-06-24 11:36:47",
+      "note": "before: apply requirment.3.txt",
+      "archive": ".app_versions/v20260624-002.zip",
+      "file_count": 446
+    },
+    {
+      "version": "v20260624-003",
+      "created_at": "2026-06-24 12:03:47",
+      "note": "before: fix app.py error shown in MODIFY.PNG",
+      "archive": ".app_versions/v20260624-003.zip",
+      "file_count": 446
+    },
+    {
+      "version": "v20260624-004",
+      "created_at": "2026-06-24 12:14:41",
+      "note": "before: fix profile phone email saving",
+      "archive": ".app_versions/v20260624-004.zip",
+      "file_count": 446
+    },
+    {
+      "version": "v20260624-005",
+      "created_at": "2026-06-24 12:24:45",
+      "note": "before: verify and fix self profile saving",
+      "archive": ".app_versions/v20260624-005.zip",
+      "file_count": 446
+    },
+    {
+      "version": "v20260624-006",
+      "created_at": "2026-06-24 12:32:32",
+      "note": "before: diagnose profile not saving in running app",
+      "archive": ".app_versions/v20260624-006.zip",
+      "file_count": 449
+    },
+    {
+      "version": "v20260624-007",
+      "created_at": "2026-06-24 12:43:58",
+      "note": "before: mail recipient email selection and sent status",
+      "archive": ".app_versions/v20260624-007.zip",
+      "file_count": 449
+    },
+    {
+      "version": "v20260624-008",
+      "created_at": "2026-06-24 12:48:36",
+      "note": "before: diagnose mail send failure",
+      "archive": ".app_versions/v20260624-008.zip",
+      "file_count": 449
+    },
+    {
+      "version": "v20260624-009",
+      "created_at": "2026-06-24 12:56:09",
+      "note": "before: clarify real email sending",
+      "archive": ".app_versions/v20260624-009.zip",
+      "file_count": 449
+    },
+    {
+      "version": "v20260624-010",
+      "created_at": "2026-06-24 13:10:29",
+      "note": "before: create child accounts for CHILDREN1 and Henri Dupuis",
+      "archive": ".app_versions/v20260624-010.zip",
+      "file_count": 450
+    },
+    {
+      "version": "v20260624-011",
+      "created_at": "2026-06-24 13:18:45",
+      "note": "before: child account simplified pages",
+      "archive": ".app_versions/v20260624-011.zip",
+      "file_count": 450
+    },
+    {
+      "version": "v20260624-012",
+      "created_at": "2026-06-24 13:25:23",
+      "note": "before: make child account page directly show profile files mail",
+      "archive": ".app_versions/v20260624-012.zip",
+      "file_count": 452
+    },
+    {
+      "version": "v20260624-013",
+      "created_at": "2026-06-24 13:30:14",
+      "note": "before: remove boss recipient from child mail",
+      "archive": ".app_versions/v20260624-013.zip",
+      "file_count": 452
+    },
+    {
+      "version": "v20260624-014",
+      "created_at": "2026-06-24 13:33:28",
+      "note": "before: remove boss email from child visible list",
+      "archive": ".app_versions/v20260624-014.zip",
+      "file_count": 452
+    },
+    {
+      "version": "v20260624-015",
+      "created_at": "2026-06-24 13:39:12",
+      "note": "before: change target email to dropdown",
+      "archive": ".app_versions/v20260624-015.zip",
+      "file_count": 452
+    },
+    {
+      "version": "v20260624-016",
+      "created_at": "2026-06-24 13:49:49",
+      "note": "before: update mail recipient role rules",
+      "archive": ".app_versions/v20260624-016.zip",
+      "file_count": 452
+    },
+    {
+      "version": "v20260624-017",
+      "created_at": "2026-06-24 13:56:05",
+      "note": "before: group target email dropdown by role",
+      "archive": ".app_versions/v20260624-017.zip",
+      "file_count": 452
+    },
+    {
+      "version": "v20260624-018",
+      "created_at": "2026-06-24 14:00:46",
+      "note": "before: allow multiple email recipients",
+      "archive": ".app_versions/v20260624-018.zip",
+      "file_count": 452
+    },
+    {
+      "version": "v20260625-001",
+      "created_at": "2026-06-25 01:50:41",
+      "note": "before restoring profile files mail routes",
+      "archive": ".app_versions/v20260625-001.zip",
+      "file_count": 492
+    },
+    {
+      "version": "v20260625-002",
+      "created_at": "2026-06-25 02:09:45",
+      "note": "merged later changes into profile files mail version",
+      "archive": ".app_versions/v20260625-002.zip",
+      "file_count": 496
+    },
+    {
+      "version": "v20260625-003",
+      "created_at": "2026-06-25 07:38:43",
+      "note": "backup current web version with profile files mail updates",
+      "archive": ".app_versions/v20260625-003.zip",
+      "file_count": 533
+    },
+    {
+      "version": "v20260625-004",
+      "created_at": "2026-06-25 08:05:30",
+      "note": "backup current web version after child dashboard and child mail privacy updates",
+      "archive": ".app_versions/v20260625-004.zip",
+      "file_count": 533
+    },
+    {
+      "version": "v20260625-005",
+      "created_at": "2026-06-25 22:51:21",
+      "note": "backup current web version after contacts list files privacy and mail recipient updates",
+      "archive": ".app_versions/v20260625-005.zip",
+      "file_count": 514
+    },
+    {
+      "version": "v20260626-001",
+      "created_at": "2026-06-26 07:59:49",
+      "note": "before UI test and polish",
+      "archive": ".app_versions/v20260626-001.zip",
+      "file_count": 515
+    },
+    {
+      "version": "v20260626-002",
+      "created_at": "2026-06-26 08:11:41",
+      "note": "after UI test and polish",
+      "archive": ".app_versions/v20260626-002.zip",
+      "file_count": 516
+    },
+    {
+      "version": "v20260626-003",
+      "created_at": "2026-06-26 08:12:18",
+      "note": "after UI polish final clean",
+      "archive": ".app_versions/v20260626-003.zip",
+      "file_count": 515
+    },
+    {
+      "version": "v20260626-004",
+      "created_at": "2026-06-26 08:21:06",
+      "note": "before submit waiting indicator",
+      "archive": ".app_versions/v20260626-004.zip",
+      "file_count": 516
+    },
+    {
+      "version": "v20260626-005",
+      "created_at": "2026-06-26 08:23:13",
+      "note": "after submit waiting indicator",
+      "archive": ".app_versions/v20260626-005.zip",
+      "file_count": 516
+    },
+    {
+      "version": "v20260626-006",
+      "created_at": "2026-06-26 08:28:57",
+      "note": "before close wait on generated result",
+      "archive": ".app_versions/v20260626-006.zip",
+      "file_count": 517
+    },
+    {
+      "version": "v20260626-007",
+      "created_at": "2026-06-26 08:34:47",
+      "note": "after auto close wait on generated result",
+      "archive": ".app_versions/v20260626-007.zip",
+      "file_count": 517
+    },
+    {
+      "version": "v20260626-008",
+      "created_at": "2026-06-26 08:37:35",
+      "note": "before restrict logs to principal",
+      "archive": ".app_versions/v20260626-008.zip",
+      "file_count": 518
+    },
+    {
+      "version": "v20260626-009",
+      "created_at": "2026-06-26 08:39:26",
+      "note": "after restrict logs to principal",
+      "archive": ".app_versions/v20260626-009.zip",
+      "file_count": 518
+    },
+    {
+      "version": "v20260626-010",
+      "created_at": "2026-06-26 08:58:45",
+      "note": "before restrict logs to boss",
+      "archive": ".app_versions/v20260626-010.zip",
+      "file_count": 519
+    },
+    {
+      "version": "v20260626-011",
+      "created_at": "2026-06-26 09:00:10",
+      "note": "after restrict logs to boss",
+      "archive": ".app_versions/v20260626-011.zip",
+      "file_count": 519
+    },
+    {
+      "version": "v20260626-012",
+      "created_at": "2026-06-26 09:38:04",
+      "note": "before restrict attendance history panel",
+      "archive": ".app_versions/v20260626-012.zip",
+      "file_count": 530
+    },
+    {
+      "version": "v20260626-013",
+      "created_at": "2026-06-26 09:40:27",
+      "note": "after restrict attendance history panel",
+      "archive": ".app_versions/v20260626-013.zip",
+      "file_count": 530
+    },
+    {
+      "version": "v20260626-014",
+      "created_at": "2026-06-26 09:49:40",
+      "note": "before shrink files image previews",
+      "archive": ".app_versions/v20260626-014.zip",
+      "file_count": 531
+    },
+    {
+      "version": "v20260626-015",
+      "created_at": "2026-06-26 09:50:26",
+      "note": "after shrink files image previews",
+      "archive": ".app_versions/v20260626-015.zip",
+      "file_count": 531
+    },
+    {
+      "version": "v20260626-016",
+      "created_at": "2026-06-26 09:56:32",
+      "note": "after clean service port references",
+      "archive": ".app_versions/v20260626-016.zip",
+      "file_count": 531
+    },
+    {
+      "version": "v20260626-017",
+      "created_at": "2026-06-26 10:01:36",
+      "note": "manual backup current version",
+      "archive": ".app_versions/v20260626-017.zip",
+      "file_count": 532
+    },
+    {
+      "version": "v20260626-018",
+      "created_at": "2026-06-26 10:21:36",
+      "note": "4-week fiche calendar preview",
+      "archive": ".app_versions/v20260626-018.zip",
+      "file_count": 532
+    },
+    {
+      "version": "v20260626-019",
+      "created_at": "2026-06-26 10:30:08",
+      "note": "compact gray fiche calendar styling",
+      "archive": ".app_versions/v20260626-019.zip",
+      "file_count": 532
+    },
+    {
+      "version": "v20260626-020",
+      "created_at": "2026-06-26 10:38:29",
+      "note": "auto refresh fiche preview on date change",
+      "archive": ".app_versions/v20260626-020.zip",
+      "file_count": 533
+    },
+    {
+      "version": "v20260626-021",
+      "created_at": "2026-06-26 10:44:53",
+      "note": "half width fiche calendar preview",
+      "archive": ".app_versions/v20260626-021.zip",
+      "file_count": 533
+    }
+  ]
+}

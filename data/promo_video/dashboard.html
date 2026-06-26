@@ -1,0 +1,1463 @@
+<!doctype html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>Dashboard</title>
+      
+    <style>
+    :root {
+      --bg: #f6f8fb;
+      --panel: #ffffff;
+      --panel-soft: #f9fbfd;
+      --text: #17212f;
+      --muted: #667382;
+      --line: #dde5ee;
+      --line-strong: #c7d2df;
+      --blue: #2563eb;
+      --green: #11875d;
+      --gray: #697582;
+      --amber: #b7791f;
+      --red: #b42318;
+      --nav: #152238;
+      --navText: #eff4fb;
+      --focus: rgba(37, 99, 235, 0.22);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "Segoe UI", Arial, sans-serif; background: linear-gradient(180deg, #eef4fb 0, #f6f8fb 260px), var(--bg); color: var(--text); font-size: 14px; line-height: 1.45; }
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .topbar { background: var(--nav); color: var(--navText); padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; box-shadow: 0 8px 24px rgba(21, 34, 56, 0.16); }
+    .brand { font-size: 17px; font-weight: 700; letter-spacing: 0; white-space: nowrap; }
+    .nav { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .nav a, .nav button { color: var(--navText); background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.14); padding: 7px 11px; border-radius: 6px; cursor: pointer; font-size: 13px; text-decoration: none; transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease; }
+    .nav a:hover, .nav button:hover { background: rgba(255,255,255,0.16); border-color: rgba(255,255,255,0.28); text-decoration: none; }
+    .wrap { max-width: 1600px; margin: 0 auto; padding: 20px; }
+    .grid { display: grid; gap: 16px; }
+    .two-col { grid-template-columns: minmax(0, 1.7fr) minmax(360px, 1fr); align-items: start; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; box-shadow: 0 10px 24px rgba(21, 34, 56, 0.06); }
+    .panel h2, .panel h3 { margin: 0 0 10px; font-size: 18px; line-height: 1.25; }
+    .muted { color: var(--muted); }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, 108px); justify-content: start; gap: 8px; margin-bottom: 10px; }
+    .stat { border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; background: var(--panel-soft); display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 40px; white-space: nowrap; }
+    .stat .muted { font-size: 11px; font-weight: 600; }
+    .stat .value { font-size: 18px; font-weight: 700; margin-top: 0; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-bottom: 12px; }
+    label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+    input, select, textarea { width: 100%; border: 1px solid var(--line-strong); border-radius: 6px; padding: 9px 10px; font-size: 14px; background: white; color: var(--text); outline: none; }
+    input:focus, select:focus, textarea:focus { border-color: var(--blue); box-shadow: 0 0 0 3px var(--focus); }
+    input[type="checkbox"] { width: auto; }
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid transparent; border-radius: 6px; padding: 9px 12px; min-height: 38px; font-size: 14px; font-weight: 600; cursor: pointer; background: #dbe7f5; color: #10233d; text-decoration: none; white-space: nowrap; transition: filter 120ms ease, box-shadow 120ms ease; }
+    .btn:hover { filter: brightness(0.98); text-decoration: none; box-shadow: 0 5px 12px rgba(21, 34, 56, 0.10); }
+    .btn.primary { background: var(--blue); color: white; }
+    .btn.green { background: #0e9f6e; color: white; }
+    .btn.gray { background: #e6ebf2; color: #394b59; }
+    .btn.red { background: var(--red); color: white; }
+    .btn.amber { background: #d99a2b; color: white; }
+    .btn.ghost { background: transparent; border-color: var(--line); }
+    .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .action-panel { display: grid; grid-template-columns: max-content; gap: 10px; align-items: start; margin-bottom: 12px; }
+    .action-card { border: 1px solid var(--line); border-radius: 8px; background: var(--panel-soft); padding: 10px; }
+    .action-panel .action-card { border-width: 0.5px; border-color: #e6ebf2; }
+    .dashboard-filters { display: grid; grid-template-columns: repeat(2, 150px); gap: 10px; align-items: end; }
+    .dashboard-filters input, .dashboard-filters select { border-width: 0.5px; border-color: #dfe6ee; }
+    .selected-action-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .dashboard-side { margin-top: 0; }
+    .selected-action-meta { min-width: 180px; }
+    .action-buttons { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .action-buttons .btn { min-width: 110px; justify-content: center; }
+    .btn:disabled { background: #e7edf5 !important; color: #9aa7b6 !important; border-color: #d6deea !important; cursor: not-allowed; opacity: 1; box-shadow: none; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(164px, 1fr)); gap: 8px; }
+    .card { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #fff; display: grid; grid-template-columns: 52px minmax(0, 1fr); align-items: center; min-height: 0; padding: 5px; gap: 6px; transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease; }
+    .card-link { display: block; color: inherit; text-decoration: none; height: auto; }
+    .card-link:hover { text-decoration: none; }
+    .card-link:hover .card { border-color: #aab7c6; box-shadow: 0 8px 18px rgba(21, 34, 56, 0.10); transform: translateY(-1px); }
+    .card.present { border-color: #8fd3a5; background: #f2fbf5; }
+    .card.absent, .card.checkedout, .card.closed { background: #f7f8fa; color: #8b97a5; }
+    .card.closed { background: #fff8e8; border-color: #f0d38a; }
+    .card.selected { outline: 2px solid var(--blue); outline-offset: 1px; }
+    .card.absent .photo, .card.checkedout .photo, .card.closed .photo { filter: grayscale(1) opacity(0.42); }
+    .card.absent .name, .card.checkedout .name, .card.closed .name, .card.absent .class-tag, .card.checkedout .class-tag, .card.closed .class-tag, .card.absent .small, .card.checkedout .small, .card.closed .small { color: #8b97a5; }
+    .count-strip { display: flex; flex-wrap: wrap; gap: 3px; margin: 0 0 6px; }
+    .count-chip { border: 1px solid var(--line); border-radius: 999px; padding: 1px 6px; font-size: 11px; line-height: 1.1; background: #fff; color: var(--muted); }
+    .count-chip.strong { color: var(--text); font-weight: 700; }
+    .card .photo { width: 48px; height: 48px; background: #f2fbf5; display: flex; align-items: center; justify-content: center; overflow: hidden; padding: 0; border-radius: 50%; }
+    .card .photo img { width: 48px; height: 48px; border-radius: 50%; object-fit: cover; display: block; border: 2px solid #cde0f6; background: #e8f5ef; }
+    .card .content { padding: 0; display: grid; gap: 2px; min-width: 0; }
+    .name { font-weight: 700; line-height: 1.05; font-size: 12px; overflow-wrap: anywhere; }
+    .class-tag, .badge { display: inline-flex; width: fit-content; border-radius: 999px; padding: 0 4px; font-size: 10px; line-height: 1; border: 1px solid transparent; }
+    .class-tag { margin-top: 0; }
+    .badge.present { background: #d8f5e4; color: #0d6b39; }
+    .badge.absent { background: #eef2f6; color: #52616e; }
+    .badge.closed { background: #fff2c8; color: #8b5c00; }
+    .badge.checkedout { background: #eef2f6; color: #52616e; }
+    .badge.warn { background: #fff2f2; color: #9f1239; }
+    .selected-child-head { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: center; margin-bottom: 10px; }
+    .selected-child-head img { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); }
+    .selected-child-name { font-weight: 700; color: var(--text); }
+    .selected-child-head.absent img, .selected-child-head.closed img { filter: grayscale(1) opacity(0.45); }
+    .selected-child-head.absent .selected-child-name, .selected-child-head.closed .selected-child-name { color: #8b97a5; }
+    .selected-child-head .badge { margin-top: 6px; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border-bottom: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; font-size: 14px; }
+    th { background: var(--panel-soft); position: sticky; top: 0; z-index: 1; color: #4e5d6d; font-weight: 700; }
+    tbody tr:hover td { background: #fbfdff; }
+    .fiche th, .fiche td { text-align: center; min-width: 42px; }
+    .fiche .name-col { text-align: left; min-width: 220px; }
+    .fiche .week-col { min-width: 100px; }
+    .pill { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 28px; border-radius: 999px; font-weight: 700; }
+    .pill.P { background: #d8f5e4; color: #0d6b39; }
+    .pill.A { background: #eef2f6; color: #52616e; }
+    .pill.F { background: #fff2c8; color: #8b5c00; }
+    .login-box { max-width: 420px; margin: 72px auto; background: white; border: 1px solid var(--line); border-radius: 8px; padding: 24px; box-shadow: 0 16px 36px rgba(21, 34, 56, 0.12); }
+    .alert { padding: 10px 12px; border-radius: 6px; margin-bottom: 12px; border: 1px solid; font-weight: 600; }
+    .alert.info { background: #eef6ff; border-color: #bcd7ff; color: #0e3a66; }
+    .alert.warn { background: #fff8e6; border-color: #f0d38a; color: #7a4a00; }
+    .alert.error { background: #fff0f0; border-color: #f5b0b0; color: #921919; }
+    .small { font-size: 12px; }
+    .auto-hide { display: none !important; }
+    .right { text-align: right; }
+    .nowrap { white-space: nowrap; }
+    .muted-box { padding: 18px; background: #f7f9fc; border: 1px solid var(--line); border-radius: 6px; }
+    .user-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+    .file-grid, .mail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+    .file-card, .mail-card { border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 10px; }
+    .mail-recipient-layout { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(240px, 1.3fr); gap: 12px; align-items: start; }
+    .mail-send-to { min-height: 150px; border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 8px; display: flex; flex-direction: column; gap: 0; }
+    .mail-send-to-empty { color: var(--muted); font-size: 13px; padding: 6px 2px; }
+    .mail-recipient-pill { border: 1px solid var(--line); border-radius: 6px; background: #f8fafc; padding: 0 8px; text-align: left; cursor: pointer; font: inherit; line-height: 1.2; color: var(--text); }
+    .mail-recipient-pill:hover { background: #eef2ff; }
+    .mail-target-list { min-height: 150px; max-height: 260px; overflow-y: auto; border: 1px solid var(--line-strong); border-radius: 6px; background: #fff; }
+    .mail-target-row, .mail-target-head { display: grid; grid-template-columns: minmax(76px, 0.7fr) minmax(120px, 1fr) minmax(180px, 1.5fr); gap: 10px; align-items: center; width: 100%; padding: 0 10px; border: 0; border-bottom: 1px solid var(--line); background: #fff; color: var(--text); text-align: left; font: inherit; line-height: 1.2; }
+    .mail-target-head { position: sticky; top: 0; z-index: 1; background: var(--panel-soft); color: var(--muted); font-size: 12px; font-weight: 700; }
+    .mail-target-row { cursor: pointer; }
+    .mail-target-row:hover { background: #eef6ff; }
+    .mail-target-row span { min-width: 0; overflow-wrap: anywhere; }
+    .mail-target-empty { padding: 10px; color: var(--muted); font-size: 13px; }
+    @media (max-width: 1180px) { .two-col, .user-grid { grid-template-columns: 1fr; } .dashboard-side { margin-top: 0; } }
+    @media (max-width: 520px) {
+      .topbar { align-items: stretch; }
+      .brand { width: 100%; }
+      .nav { width: 100%; gap: 6px; }
+      .nav a, .nav button { flex: 1 1 auto; text-align: center; }
+      .wrap { padding: 12px; }
+      .panel { padding: 12px; }
+      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .cards { grid-template-columns: 1fr; }
+      .action-panel { grid-template-columns: 1fr; }
+      .dashboard-filters { grid-template-columns: 1fr; }
+      .mail-recipient-layout { grid-template-columns: 1fr; }
+    }
+    .wait-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: rgba(246, 248, 251, 0.72);
+      backdrop-filter: blur(2px);
+    }
+    .wait-overlay.show { display: flex; }
+    .wait-box {
+      width: min(360px, 100%);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: 0 18px 44px rgba(21, 34, 56, 0.18);
+      padding: 18px;
+      display: grid;
+      grid-template-columns: 34px 1fr;
+      gap: 12px;
+      align-items: center;
+    }
+    .wait-spinner {
+      width: 28px;
+      height: 28px;
+      border: 3px solid #dbe7f5;
+      border-top-color: var(--blue);
+      border-radius: 50%;
+      animation: wait-spin 0.8s linear infinite;
+    }
+    .wait-title { font-weight: 700; }
+    .wait-text { color: var(--muted); font-size: 13px; margin-top: 2px; }
+    .btn.busy { pointer-events: none; opacity: 0.82; }
+    @keyframes wait-spin { to { transform: rotate(360deg); } }
+    @media print { .topbar, .no-print { display: none !important; } body { background: white; } .wrap { max-width: none; padding: 0; } .panel { border: none; box-shadow: none; } }
+    </style>
+    
+    </head>
+    <body>
+      
+        <div class="topbar">
+          <div class="brand">Kindergarten Attendance Web</div>
+          <div class="nav">
+            <a href="http://127.0.0.1:8000/dashboard">Dashboard</a><a href="http://127.0.0.1:8000/profile">Profile</a><a href="http://127.0.0.1:8000/contacts">Contacts</a><a href="http://127.0.0.1:8000/files">Files</a><a href="http://127.0.0.1:8000/mail">Mail</a><a href="http://127.0.0.1:8000/reports">4-Week Fiche</a><a href="http://127.0.0.1:8000/audit">Logs</a><a href="http://127.0.0.1:8000/closed-dates">Closed Dates</a><a href="http://127.0.0.1:8000/users">Users</a><a href="http://127.0.0.1:8000/children">Children</a><form method="post" action="/logout" style="display:inline"><button type="submit">Logout</button></form>
+          </div>
+          <div class="small">Boss &middot; Boss</div>
+        </div>
+        
+      <div class="wrap">
+        
+        
+        <div class="panel">
+          <h2>Dashboard</h2>
+          <div class="action-panel">
+            <div class="action-card">
+              
+              <form method="get" action="/dashboard" class="dashboard-filters" id="dashboard-filters">
+                <div>
+                  <label>Class</label>
+                  <select name="class" id="dashboard-class" onchange="this.form.submit()"><option value="all" selected>all</option><option value="Les Abeilles" >Les Abeilles</option><option value="Les Coccinelles" >Les Coccinelles</option><option value="Les Cockatiels" >Les Cockatiels</option><option value="Les Dragons" >Les Dragons</option><option value="Les Lionceaux" >Les Lionceaux</option><option value="Les Méduses" >Les Méduses</option><option value="Les Ouistitis" >Les Ouistitis</option><option value="Les Petits Monstres" >Les Petits Monstres</option><option value="Les Tortues" >Les Tortues</option></select>
+                </div>
+                <div>
+                  <label>Date</label>
+                  <input type="date" name="date" value="2026-06-26" onchange="this.form.submit()">
+                </div>
+              </form>
+        
+            </div>
+          </div>
+          <div class="stats">
+            <div class="stat"><div class="muted">Children</div><div class="value">85</div></div>
+            <div class="stat"><div class="muted">Present</div><div class="value" style="color:var(--green)">8</div></div>
+            <div class="stat"><div class="muted">Absence</div><div class="value" style="color:var(--gray)">77</div></div>
+            <div class="stat"><div class="muted">Closed</div><div class="value" style="color:var(--amber)">0</div></div>
+          </div>
+        </div>
+          <div class="grid two-col" style="margin-top:16px">
+          
+          <div class="panel">
+            <h3 style="margin-bottom:6px">Children</h3>
+            <div class="count-strip"><span class="count-chip strong">Total: 85</span><span class="count-chip">Les Abeilles: 12</span><span class="count-chip">Les Coccinelles: 8</span><span class="count-chip">Les Cockatiels: 9</span><span class="count-chip">Les Dragons: 8</span><span class="count-chip">Les Lionceaux: 16</span><span class="count-chip">Les Méduses: 6</span><span class="count-chip">Les Ouistitis: 8</span><span class="count-chip">Les Petits Monstres: 10</span><span class="count-chip">Les Tortues: 8</span></div>
+            <div class="cards">
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=336">
+                  <div class="card present selected">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cQ2hhcmxlcy1BbnRvaW5lIFJhY2luZV9wbGFjZWhvbGRlci5wbmc" alt="Charles-Antoine Racine"></div>
+                    <div class="content">
+                      <div class="name">Charles-Antoine Racine</div>
+                      <div class="class-tag">Les Abeilles</div>
+                      <div class="badge present">Present</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=410">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cQ0hJTERSRU4xLmpwZw" alt="CHILDREN1"></div>
+                    <div class="content">
+                      <div class="name">CHILDREN1</div>
+                      <div class="class-tag">Les Abeilles</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=348">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cRnJleWphIFN1bnN0cnVtX3BsYWNlaG9sZGVyLnBuZw" alt="Freyja Sunstrum"></div>
+                    <div class="content">
+                      <div class="name">Freyja Sunstrum</div>
+                      <div class="class-tag">Les Abeilles</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=350">
+                  <div class="card present ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cSGVucmkgRHVwdWlzX3BsYWNlaG9sZGVyLnBuZw" alt="Henri Dupuis"></div>
+                    <div class="content">
+                      <div class="name">Henri Dupuis</div>
+                      <div class="class-tag">Les Abeilles</div>
+                      <div class="badge present">Present</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=353">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cSmFjb2IgUml2ZXN0X3BsYWNlaG9sZGVyLnBuZw" alt="Jacob Rivest"></div>
+                    <div class="content">
+                      <div class="name">Jacob Rivest</div>
+                      <div class="class-tag">Les Abeilles</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=363">
+                  <div class="card present ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cSnVsZXMgRm9ydGllcl9wbGFjZWhvbGRlci5wbmc" alt="Jules Fortier"></div>
+                    <div class="content">
+                      <div class="name">Jules Fortier</div>
+                      <div class="class-tag">Les Abeilles</div>
+                      <div class="badge present">Present</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=386">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cTcOpZMOpcmljIGxlYmxhbmNfcGxhY2Vob2xkZXIucG5n" alt="Médéric leblanc"></div>
+                    <div class="content">
+                      <div class="name">Médéric leblanc</div>
+                      <div class="class-tag">Les Abeilles</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=396">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cUm9zZSBEcm91aW5fcGxhY2Vob2xkZXIucG5n" alt="Rose Drouin"></div>
+                    <div class="content">
+                      <div class="name">Rose Drouin</div>
+                      <div class="class-tag">Les Abeilles</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=341">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cw4lkb3VhcmQgUGVsbGV0aWVyX3BsYWNlaG9sZGVyLnBuZw" alt="Édouard Pelletier"></div>
+                    <div class="content">
+                      <div class="name">Édouard Pelletier</div>
+                      <div class="class-tag">Les Abeilles</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=342">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cw4lsaWFubmUgTmFkb25fcGxhY2Vob2xkZXIucG5n" alt="Élianne Nadon"></div>
+                    <div class="content">
+                      <div class="name">Élianne Nadon</div>
+                      <div class="class-tag">Les Abeilles</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=344">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cw4lsaW90IFBhcsOpLU1vcXVpbl9wbGFjZWhvbGRlci5wbmc" alt="Éliot Paré-Moquin"></div>
+                    <div class="content">
+                      <div class="name">Éliot Paré-Moquin</div>
+                      <div class="class-tag">Les Abeilles</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=347">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cw4l2YW4gUGFwaWxsb25fcGxhY2Vob2xkZXIucG5n" alt="Évan Papillon"></div>
+                    <div class="content">
+                      <div class="name">Évan Papillon</div>
+                      <div class="class-tag">Les Abeilles</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=346">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cRXN0ZWxsZSBMw6lwaW5lX3BsYWNlaG9sZGVyLnBuZw" alt="Estelle Lépine"></div>
+                    <div class="content">
+                      <div class="name">Estelle Lépine</div>
+                      <div class="class-tag">Les Coccinelles</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=352">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cSmFjb2IgTGFwaWVycmVfcGxhY2Vob2xkZXIucG5n" alt="Jacob Lapierre"></div>
+                    <div class="content">
+                      <div class="name">Jacob Lapierre</div>
+                      <div class="class-tag">Les Coccinelles</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=366">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cTGF1cmVuY2UgUGFxdWV0dGVfcGxhY2Vob2xkZXIucG5n" alt="Laurence Paquette"></div>
+                    <div class="content">
+                      <div class="name">Laurence Paquette</div>
+                      <div class="class-tag">Les Coccinelles</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=369">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cTMOpb25pZSBDaGFtcGFnbmVfcGxhY2Vob2xkZXIucG5n" alt="Léonie Champagne"></div>
+                    <div class="content">
+                      <div class="name">Léonie Champagne</div>
+                      <div class="class-tag">Les Coccinelles</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=384">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cTWF5YSBGb3J0aWVyX3BsYWNlaG9sZGVyLnBuZw" alt="Maya Fortier"></div>
+                    <div class="content">
+                      <div class="name">Maya Fortier</div>
+                      <div class="class-tag">Les Coccinelles</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=394">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cUmFmYWVsbGUgTGUgUm95X3BsYWNlaG9sZGVyLnBuZw" alt="Rafaelle Le Roy"></div>
+                    <div class="content">
+                      <div class="name">Rafaelle Le Roy</div>
+                      <div class="class-tag">Les Coccinelles</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=398">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cU2FtIEdhZ25vbl9wbGFjZWhvbGRlci5wbmc" alt="Sam Gagnon"></div>
+                    <div class="content">
+                      <div class="name">Sam Gagnon</div>
+                      <div class="class-tag">Les Coccinelles</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=409">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cWmVsZGEgRGVhbi1Nb3JzZV9wbGFjZWhvbGRlci5wbmc" alt="Zelda Dean-Morse"></div>
+                    <div class="content">
+                      <div class="name">Zelda Dean-Morse</div>
+                      <div class="class-tag">Les Coccinelles</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=413">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cUHLDqW5vbSBOb21fcGxhY2Vob2xkZXIucG5n" alt="CHILDREN2"></div>
+                    <div class="content">
+                      <div class="name">CHILDREN2</div>
+                      <div class="class-tag">Les Cockatiels</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=354">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cSmFtaWUgQm91Y2hhcmRfcGxhY2Vob2xkZXIucG5n" alt="Jamie Bouchard"></div>
+                    <div class="content">
+                      <div class="name">Jamie Bouchard</div>
+                      <div class="class-tag">Les Cockatiels</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=362">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cSnVsZXMgRmF1c3QtQm91ZHJlYXVfcGxhY2Vob2xkZXIucG5n" alt="Jules Faust-Boudreau"></div>
+                    <div class="content">
+                      <div class="name">Jules Faust-Boudreau</div>
+                      <div class="class-tag">Les Cockatiels</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=374">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cTGl2aWEgWW91bmdfcGxhY2Vob2xkZXIucG5n" alt="Livia Young"></div>
+                    <div class="content">
+                      <div class="name">Livia Young</div>
+                      <div class="class-tag">Les Cockatiels</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=377">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cTG91aXMgQ2hhbW90X3BsYWNlaG9sZGVyLnBuZw" alt="Louis Chamot"></div>
+                    <div class="content">
+                      <div class="name">Louis Chamot</div>
+                      <div class="class-tag">Les Cockatiels</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=367">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cTMOpbyBWYW5pZXJfcGxhY2Vob2xkZXIucG5n" alt="Léo Vanier"></div>
+                    <div class="content">
+                      <div class="name">Léo Vanier</div>
+                      <div class="class-tag">Les Cockatiels</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=388">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cTWlrYWVsYSBMw6l2ZXNxdWUtU3QtRGVuaXNfcGxhY2Vob2xkZXIucG5n" alt="Mikaela Lévesque-St-Denis"></div>
+                    <div class="content">
+                      <div class="name">Mikaela Lévesque-St-Denis</div>
+                      <div class="class-tag">Les Cockatiels</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=399">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cU2FtbWllIEdhZ25vbl9wbGFjZWhvbGRlci5wbmc" alt="Sammie Gagnon"></div>
+                    <div class="content">
+                      <div class="name">Sammie Gagnon</div>
+                      <div class="class-tag">Les Cockatiels</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=408">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cVml0YWx5IE1pcm9uX3BsYWNlaG9sZGVyLnBuZw" alt="Vitaly Miron"></div>
+                    <div class="content">
+                      <div class="name">Vitaly Miron</div>
+                      <div class="class-tag">Les Cockatiels</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=333">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cQsOpYXRyaWNlIENoYWxpZm91eF9wbGFjZWhvbGRlci5wbmc" alt="Béatrice Chalifoux"></div>
+                    <div class="content">
+                      <div class="name">Béatrice Chalifoux</div>
+                      <div class="class-tag">Les Dragons</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=338">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cQ2hhcmxvdHRlIFN0LVBpZXJyZV9wbGFjZWhvbGRlci5wbmc" alt="Charlotte St-Pierre"></div>
+                    <div class="content">
+                      <div class="name">Charlotte St-Pierre</div>
+                      <div class="class-tag">Les Dragons</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=349">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cR2HDq2wgUm9jaGVsZWF1X3BsYWNlaG9sZGVyLnBuZw" alt="Gaël Rocheleau"></div>
+                    <div class="content">
+                      <div class="name">Gaël Rocheleau</div>
+                      <div class="class-tag">Les Dragons</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=364">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cSnVsaXVzIEJhemluZXRfcGxhY2Vob2xkZXIucG5n" alt="Julius Bazinet"></div>
+                    <div class="content">
+                      <div class="name">Julius Bazinet</div>
+                      <div class="class-tag">Les Dragons</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=379">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cTHlhbmEgTGFjaGFpbmVfcGxhY2Vob2xkZXIucG5n" alt="Lyana Lachaine"></div>
+                    <div class="content">
+                      <div class="name">Lyana Lachaine</div>
+                      <div class="class-tag">Les Dragons</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=392">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cT3NjYXIgTGFmcmVuacOocmVfcGxhY2Vob2xkZXIucG5n" alt="Oscar Lafrenière"></div>
+                    <div class="content">
+                      <div class="name">Oscar Lafrenière</div>
+                      <div class="class-tag">Les Dragons</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=393">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cUGhpbGlwcGUgTW9yaW4tTGFmbGFtbWVfcGxhY2Vob2xkZXIucG5n" alt="Philippe Morin-Laflamme"></div>
+                    <div class="content">
+                      <div class="name">Philippe Morin-Laflamme</div>
+                      <div class="class-tag">Les Dragons</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=405">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cVmljdG9yIExhbmdsb2lzX3BsYWNlaG9sZGVyLnBuZw" alt="Victor Langlois"></div>
+                    <div class="content">
+                      <div class="name">Victor Langlois</div>
+                      <div class="class-tag">Les Dragons</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=327">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cQWxleCBSaWNoZXJfcGxhY2Vob2xkZXIucG5n" alt="Alex Richer"></div>
+                    <div class="content">
+                      <div class="name">Alex Richer</div>
+                      <div class="class-tag">Les Lionceaux</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=329">
+                  <div class="card present ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cQWx5c3NhIEdvc3NlbGluLSBNYXJ0ZWxfcGxhY2Vob2xkZXIucG5n" alt="Alyssa Gosselin- Martel"></div>
+                    <div class="content">
+                      <div class="name">Alyssa Gosselin- Martel</div>
+                      <div class="class-tag">Les Lionceaux</div>
+                      <div class="badge present">Present</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=334">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cQmVuamFtaW4gRm9ydGluX3BsYWNlaG9sZGVyLnBuZw" alt="Benjamin Fortin"></div>
+                    <div class="content">
+                      <div class="name">Benjamin Fortin</div>
+                      <div class="class-tag">Les Lionceaux</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=345">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cRWxsYSBDb3TDqS1Sb2RyaWd1ZXpfcGxhY2Vob2xkZXIucG5n" alt="Ella Coté-Rodriguez"></div>
+                    <div class="content">
+                      <div class="name">Ella Coté-Rodriguez</div>
+                      <div class="class-tag">Les Lionceaux</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=351">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cSXNsYSBMYW1hbnRpYV9wbGFjZWhvbGRlci5wbmc" alt="Isla Lamantia"></div>
+                    <div class="content">
+                      <div class="name">Isla Lamantia</div>
+                      <div class="class-tag">Les Lionceaux</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=361">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cSnVsZXMgQ2hhbXBhZ25lX3BsYWNlaG9sZGVyLnBuZw" alt="Jules Champagne"></div>
+                    <div class="content">
+                      <div class="name">Jules Champagne</div>
+                      <div class="class-tag">Les Lionceaux</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=372">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cTGlhbSBMYWJiw6lfcGxhY2Vob2xkZXIucG5n" alt="Liam Labbé"></div>
+                    <div class="content">
+                      <div class="name">Liam Labbé</div>
+                      <div class="class-tag">Les Lionceaux</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=373">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cTGlhbSBMZWJsYW5jX3BsYWNlaG9sZGVyLnBuZw" alt="Liam Leblanc"></div>
+                    <div class="content">
+                      <div class="name">Liam Leblanc</div>
+                      <div class="class-tag">Les Lionceaux</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=380">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cTHlsYSBCZXJnZXJvbl9wbGFjZWhvbGRlci5wbmc" alt="Lyla Bergeron"></div>
+                    <div class="content">
+                      <div class="name">Lyla Bergeron</div>
+                      <div class="class-tag">Les Lionceaux</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=383">
+                  <div class="card present ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cTWF4aW0gUm91bGVhdV9wbGFjZWhvbGRlci5wbmc" alt="Maxim Rouleau"></div>
+                    <div class="content">
+                      <div class="name">Maxim Rouleau</div>
+                      <div class="class-tag">Les Lionceaux</div>
+                      <div class="badge present">Present</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=389">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cTW9oYW1lZCBCYWxkZV9wbGFjZWhvbGRlci5wbmc" alt="Mohamed Balde"></div>
+                    <div class="content">
+                      <div class="name">Mohamed Balde</div>
+                      <div class="class-tag">Les Lionceaux</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=390">
+                  <div class="card present ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cTXlsYW4gU3RhcGxlc19wbGFjZWhvbGRlci5wbmc" alt="Mylan Staples"></div>
+                    <div class="content">
+                      <div class="name">Mylan Staples</div>
+                      <div class="class-tag">Les Lionceaux</div>
+                      <div class="badge present">Present</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=397">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cUm9zaWUgQ2hhbGlmb3VyX3BsYWNlaG9sZGVyLnBuZw" alt="Rosie Chalifour"></div>
+                    <div class="content">
+                      <div class="name">Rosie Chalifour</div>
+                      <div class="class-tag">Les Lionceaux</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=402">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cU2ltb25lIFBhcGlsbG9uX3BsYWNlaG9sZGVyLnBuZw" alt="Simone Papillon"></div>
+                    <div class="content">
+                      <div class="name">Simone Papillon</div>
+                      <div class="class-tag">Les Lionceaux</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=403">
+                  <div class="card present ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cU3V6aWUgRGVhbiBNb3JzZV9wbGFjZWhvbGRlci5wbmc" alt="Suzie Dean Morse"></div>
+                    <div class="content">
+                      <div class="name">Suzie Dean Morse</div>
+                      <div class="class-tag">Les Lionceaux</div>
+                      <div class="badge present">Present</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=404">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cVGjDqW9kb3JlIENoYW1vdC1XaW50ZXJoYWx0ZXJfcGxhY2Vob2xkZXIucG5n" alt="Théodore Chamot-Winterhalter"></div>
+                    <div class="content">
+                      <div class="name">Théodore Chamot-Winterhalter</div>
+                      <div class="class-tag">Les Lionceaux</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=340">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cRGFwaG5leSBDeXJfcGxhY2Vob2xkZXIucG5n" alt="Daphney Cyr"></div>
+                    <div class="content">
+                      <div class="name">Daphney Cyr</div>
+                      <div class="class-tag">Les Méduses</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=356">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cSmF5ZGVuIE1vcmluX3BsYWNlaG9sZGVyLnBuZw" alt="Jayden Morin"></div>
+                    <div class="content">
+                      <div class="name">Jayden Morin</div>
+                      <div class="class-tag">Les Méduses</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=357">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cSmF5c3NlbiBCb3VjaGFyZF9wbGFjZWhvbGRlci5wbmc" alt="Jayssen Bouchard"></div>
+                    <div class="content">
+                      <div class="name">Jayssen Bouchard</div>
+                      <div class="class-tag">Les Méduses</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=365">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cS2F5bGllIERlcm9tZSBQbGFudGVfcGxhY2Vob2xkZXIucG5n" alt="Kaylie Derome Plante"></div>
+                    <div class="content">
+                      <div class="name">Kaylie Derome Plante</div>
+                      <div class="class-tag">Les Méduses</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=378">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cTG91aXMgTGFtYXJjaGVfcGxhY2Vob2xkZXIucG5n" alt="Louis Lamarche"></div>
+                    <div class="content">
+                      <div class="name">Louis Lamarche</div>
+                      <div class="class-tag">Les Méduses</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=391">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cTmF0aGFuIFN1ZW5nYXMgRnJhbmNvaXNfcGxhY2Vob2xkZXIucG5n" alt="Nathan Suengas Francois"></div>
+                    <div class="content">
+                      <div class="name">Nathan Suengas Francois</div>
+                      <div class="class-tag">Les Méduses</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=331">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cQXVkw6lsaWUgR2lyYXJkX3BsYWNlaG9sZGVyLnBuZw" alt="Audélie Girard"></div>
+                    <div class="content">
+                      <div class="name">Audélie Girard</div>
+                      <div class="class-tag">Les Ouistitis</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=337">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cQ2hhcmxpZSBUZXNzaWVyX3BsYWNlaG9sZGVyLnBuZw" alt="Charlie Tessier"></div>
+                    <div class="content">
+                      <div class="name">Charlie Tessier</div>
+                      <div class="class-tag">Les Ouistitis</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=339">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cQ2hyaXN0aWFuIEV0aGllcl9wbGFjZWhvbGRlci5wbmc" alt="Christian Ethier"></div>
+                    <div class="content">
+                      <div class="name">Christian Ethier</div>
+                      <div class="class-tag">Les Ouistitis</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=375">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cTG9pYyBDeXJfcGxhY2Vob2xkZXIucG5n" alt="Loic Cyr"></div>
+                    <div class="content">
+                      <div class="name">Loic Cyr</div>
+                      <div class="class-tag">Les Ouistitis</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=376">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cTG91IER1IHNhYmxvbl9wbGFjZWhvbGRlci5wbmc" alt="Lou Du sablon"></div>
+                    <div class="content">
+                      <div class="name">Lou Du sablon</div>
+                      <div class="class-tag">Les Ouistitis</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=400">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cU2FtdWVsbGUgUmFjaW5lX3BsYWNlaG9sZGVyLnBuZw" alt="Samuelle Racine"></div>
+                    <div class="content">
+                      <div class="name">Samuelle Racine</div>
+                      <div class="class-tag">Les Ouistitis</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=401">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cU2FyYWggU3BpZHVzX3BsYWNlaG9sZGVyLnBuZw" alt="Sarah Spidus"></div>
+                    <div class="content">
+                      <div class="name">Sarah Spidus</div>
+                      <div class="class-tag">Les Ouistitis</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=406">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cVmljdG9yIFBlbGxldGllcl9wbGFjZWhvbGRlci5wbmc" alt="Victor Pelletier"></div>
+                    <div class="content">
+                      <div class="name">Victor Pelletier</div>
+                      <div class="class-tag">Les Ouistitis</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=328">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cQWxpY2UgTGFiYsOpX3BsYWNlaG9sZGVyLnBuZw" alt="Alice Labbé"></div>
+                    <div class="content">
+                      <div class="name">Alice Labbé</div>
+                      <div class="class-tag">Les Petits Monstres</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=330">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cQW5nZWx5a2EgRGVyb21lIFBsYW50ZV9wbGFjZWhvbGRlci5wbmc" alt="Angelyka Derome Plante"></div>
+                    <div class="content">
+                      <div class="name">Angelyka Derome Plante</div>
+                      <div class="class-tag">Les Petits Monstres</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=335">
+                  <div class="card present ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cQ2FseXBzbyBNb3JlYXVfcGxhY2Vob2xkZXIucG5n" alt="Calypso Moreau"></div>
+                    <div class="content">
+                      <div class="name">Calypso Moreau</div>
+                      <div class="class-tag">Les Petits Monstres</div>
+                      <div class="badge present">Present</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=343">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cRWxpb3QgQm91Y2hhcmRfcGxhY2Vob2xkZXIucG5n" alt="Eliot Bouchard"></div>
+                    <div class="content">
+                      <div class="name">Eliot Bouchard</div>
+                      <div class="class-tag">Les Petits Monstres</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=359">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cSmVubnkgRGF2aWRfcGxhY2Vob2xkZXIucG5n" alt="Jenny David"></div>
+                    <div class="content">
+                      <div class="name">Jenny David</div>
+                      <div class="class-tag">Les Petits Monstres</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=360">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cSsOpcsO0bWUgQnJlYXVsdF9wbGFjZWhvbGRlci5wbmc" alt="Jérôme Breault"></div>
+                    <div class="content">
+                      <div class="name">Jérôme Breault</div>
+                      <div class="class-tag">Les Petits Monstres</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=370">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cTMOpdmkgR3VpbGJhdWx0X3BsYWNlaG9sZGVyLnBuZw" alt="Lévi Guilbault"></div>
+                    <div class="content">
+                      <div class="name">Lévi Guilbault</div>
+                      <div class="class-tag">Les Petits Monstres</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=371">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cTMOpdmkgTWFsbGV0dGUgR2xhdHpfcGxhY2Vob2xkZXIucG5n" alt="Lévi Mallette Glatz"></div>
+                    <div class="content">
+                      <div class="name">Lévi Mallette Glatz</div>
+                      <div class="class-tag">Les Petits Monstres</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=382">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cTWF1ZGUgQnJpc2Vib2lzX3BsYWNlaG9sZGVyLnBuZw" alt="Maude Brisebois"></div>
+                    <div class="content">
+                      <div class="name">Maude Brisebois</div>
+                      <div class="class-tag">Les Petits Monstres</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=395">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cUm9iaW4gQmVyZ2Vyb25fcGxhY2Vob2xkZXIucG5n" alt="Robin Bergeron"></div>
+                    <div class="content">
+                      <div class="name">Robin Bergeron</div>
+                      <div class="class-tag">Les Petits Monstres</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=332">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cQsOpYXRyaWNlIEJyZWF1bHRfcGxhY2Vob2xkZXIucG5n" alt="Béatrice Breault"></div>
+                    <div class="content">
+                      <div class="name">Béatrice Breault</div>
+                      <div class="class-tag">Les Tortues</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=355">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cSmFtaWUgRHVtb3VsaW4tTGF1cmluX3BsYWNlaG9sZGVyLnBuZw" alt="Jamie Dumoulin-Laurin"></div>
+                    <div class="content">
+                      <div class="name">Jamie Dumoulin-Laurin</div>
+                      <div class="class-tag">Les Tortues</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=358">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cSmVhbm5pbmUgUGlvZ2VyX3BsYWNlaG9sZGVyLnBuZw" alt="Jeannine Pioger"></div>
+                    <div class="content">
+                      <div class="name">Jeannine Pioger</div>
+                      <div class="class-tag">Les Tortues</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=368">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cTMOpb25pZSBCb3VjaGFyZF9wbGFjZWhvbGRlci5wbmc" alt="Léonie Bouchard"></div>
+                    <div class="content">
+                      <div class="name">Léonie Bouchard</div>
+                      <div class="class-tag">Les Tortues</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=385">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cTWF5bGVlIEtlbm5lZHlfcGxhY2Vob2xkZXIucG5n" alt="Maylee Kennedy"></div>
+                    <div class="content">
+                      <div class="name">Maylee Kennedy</div>
+                      <div class="class-tag">Les Tortues</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=381">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cTWHDqWx5IEdyw6lnb2lyZV9wbGFjZWhvbGRlci5wbmc" alt="Maély Grégoire"></div>
+                    <div class="content">
+                      <div class="name">Maély Grégoire</div>
+                      <div class="class-tag">Les Tortues</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=387">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cTcOpbHlhIERhbnNlcmVhdV9wbGFjZWhvbGRlci5wbmc" alt="Mélya Dansereau"></div>
+                    <div class="content">
+                      <div class="name">Mélya Dansereau</div>
+                      <div class="class-tag">Les Tortues</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                
+                <a class="card-link" href="http://127.0.0.1:8000/dashboard?class=all&date=2026-06-26&sort=class&child_id=407">
+                  <div class="card absent ">
+                    <div class="photo"><img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cVmljdG9yaWEgUGVycmVhdWx0LUxhZm9ydHVuZV9wbGFjZWhvbGRlci5wbmc" alt="Victoria Perreault-Lafortune"></div>
+                    <div class="content">
+                      <div class="name">Victoria Perreault-Lafortune</div>
+                      <div class="class-tag">Les Tortues</div>
+                      <div class="badge absent">Absence</div>
+                      <div class="small muted">2026-06-26</div>
+                    </div>
+                  </div>
+                </a>
+                </div>
+          </div>
+        
+            <div class="grid dashboard-side" style="gap:16px">
+            <div class="panel">
+              <h3>Selected Child</h3>
+              <div class="selected-child-head present">
+                <img src="http://127.0.0.1:8000/media/RDpcY29kZXh0ZXN0XFRJTUVSRUNPUkRcY2hpbGRyZW5cQ2hhcmxlcy1BbnRvaW5lIFJhY2luZV9wbGFjZWhvbGRlci5wbmc" alt="Charles-Antoine Racine">
+                <div>
+                  <div class="selected-child-name">Charles-Antoine Racine</div>
+                  <div class="small muted">Les Abeilles</div>
+                  <div class="badge present">Present</div>
+                </div>
+              </div>
+              <div class="action-buttons" style="margin-bottom:10px">
+                <form method="post" action="/child/336/event" onsubmit="return confirm('Check in Charles-Antoine Racine ?')" style="display:inline">
+                  <input type="hidden" name="date" value="2026-06-26">
+                  <input type="hidden" name="event_type" value="checkin">
+                  <button class="btn gray" type="submit" disabled>Already in</button>
+                </form>
+                <form method="post" action="/child/336/event" onsubmit="return confirm('Check out Charles-Antoine Racine ?')" style="display:inline">
+                  <input type="hidden" name="date" value="2026-06-26">
+                  <input type="hidden" name="event_type" value="checkout">
+                  <button class="btn primary" type="submit" >Check out</button>
+                </form>
+                
+                <form method="post" action="/child/336/delete-day" onsubmit="return confirm('Clear attendance for Charles-Antoine Racine on 2026-06-26 ?')" style="display:inline">
+                  <input type="hidden" name="date" value="2026-06-26">
+                  <button class="btn red" type="submit">Clear day</button>
+                </form>
+            
+              </div>
+              
+              
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Timestamp</th><th>Event</th><th>By</th></tr></thead>
+                  <tbody><tr><td>2026-06-26 07:50:58</td><td>checkin</td><td>Principal</td></tr><tr><td>2026-06-25 22:45:15</td><td>checkout</td><td>KY</td></tr><tr><td>2026-06-25 20:55:22</td><td>checkin</td><td>Boss</td></tr><tr><td>2026-06-22 23:50:48</td><td>checkin</td><td>Boss</td></tr><tr><td>2026-06-21 09:59:53</td><td>checkin</td><td>System</td></tr></tbody>
+                </table>
+              </div>
+        
+            </div>
+            
+            <div class="panel">
+              <h3>Class Summary</h3>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Class</th><th>Total</th><th>P</th><th>A</th><th>F</th></tr></thead>
+                  <tbody><tr><td>Les Abeilles</td><td>12</td><td>3</td><td>9</td><td>0</td></tr><tr><td>Les Coccinelles</td><td>8</td><td>0</td><td>8</td><td>0</td></tr><tr><td>Les Cockatiels</td><td>9</td><td>0</td><td>9</td><td>0</td></tr><tr><td>Les Dragons</td><td>8</td><td>0</td><td>8</td><td>0</td></tr><tr><td>Les Lionceaux</td><td>16</td><td>4</td><td>12</td><td>0</td></tr><tr><td>Les Méduses</td><td>6</td><td>0</td><td>6</td><td>0</td></tr><tr><td>Les Ouistitis</td><td>8</td><td>0</td><td>8</td><td>0</td></tr><tr><td>Les Petits Monstres</td><td>10</td><td>1</td><td>9</td><td>0</td></tr><tr><td>Les Tortues</td><td>8</td><td>0</td><td>8</td><td>0</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+        
+            
+            <div class="panel">
+              <h3>Admin Tools</h3>
+              <div class="btn-row">
+                <a class="btn amber" href="http://127.0.0.1:8000/statistics">Presence Summary</a>
+                <a class="btn" href="http://127.0.0.1:8000/export.xlsx">Export Excel</a>
+                <a class="btn primary" href="http://127.0.0.1:8000/reports?date=2026-06-26&format=detailed">4-Week Fiche</a>
+              </div>
+            </div>
+            
+          </div>
+        </div>
+      <script>
+        (function() {
+          const version = 815;
+          const currentUrl = new URL(window.location.href);
+          function poll() {
+            fetch('/api/dashboard-version?class=' + encodeURIComponent(currentUrl.searchParams.get('class') || 'all') + '&date=' + encodeURIComponent(currentUrl.searchParams.get('date') || '2026-06-26'), {
+              credentials: 'same-origin'
+            })
+            .then(r => r.ok ? r.json() : null)
+            .then(data => {
+              if (!data) return;
+              if (typeof data.version === 'number' && data.version !== version) {
+                window.location.reload();
+              }
+            })
+            .catch(() => {});
+          }
+          setInterval(poll, 5000);
+        })();
+        </script>
+        
+      </div>
+      <div class="wait-overlay" id="wait-overlay" role="status" aria-live="polite" aria-hidden="true">
+        <div class="wait-box">
+          <div class="wait-spinner" aria-hidden="true"></div>
+          <div>
+            <div class="wait-title" id="wait-title">Processing...</div>
+            <div class="wait-text" id="wait-text">Please wait. Do not click again.</div>
+          </div>
+        </div>
+      </div>
+      <iframe id="wait-download-frame" name="wait-download-frame" style="display:none" title="Download result"></iframe>
+      <script>
+      (function() {
+        const overlay = document.getElementById('wait-overlay');
+        const title = document.getElementById('wait-title');
+        const text = document.getElementById('wait-text');
+        let activeButton = null;
+        let originalButtonText = '';
+        let waitTimer = null;
+        let downloadPollTimer = null;
+        let waitingForDownload = false;
+        function hideWait() {
+          if (!overlay) return;
+          overlay.classList.remove('show');
+          overlay.setAttribute('aria-hidden', 'true');
+          if (waitTimer) {
+            window.clearTimeout(waitTimer);
+            waitTimer = null;
+          }
+          if (downloadPollTimer) {
+            window.clearInterval(downloadPollTimer);
+            downloadPollTimer = null;
+          }
+          waitingForDownload = false;
+          if (activeButton) {
+            activeButton.classList.remove('busy');
+            activeButton.removeAttribute('aria-busy');
+            if (originalButtonText) activeButton.textContent = originalButtonText;
+          }
+          activeButton = null;
+          originalButtonText = '';
+        }
+        function showWait(message, button) {
+          if (!overlay) return;
+          title.textContent = message || 'Processing...';
+          text.textContent = 'Please wait. Do not click again.';
+          overlay.classList.add('show');
+          overlay.setAttribute('aria-hidden', 'false');
+          if (button) {
+            activeButton = button;
+            originalButtonText = button.textContent;
+            button.classList.add('busy');
+            button.setAttribute('aria-busy', 'true');
+            button.textContent = button.getAttribute('data-wait-text') || message || 'Processing...';
+          }
+        }
+        function waitFrame() {
+          let frame = document.getElementById('wait-download-frame');
+          if (!frame) {
+            frame = document.createElement('iframe');
+            frame.id = 'wait-download-frame';
+            frame.name = 'wait-download-frame';
+            frame.style.display = 'none';
+            frame.title = 'Download result';
+            document.body.appendChild(frame);
+          }
+          if (frame.getAttribute('data-wait-bound') !== 'true') {
+            frame.addEventListener('load', function() {
+              if (waitingForDownload) hideWait();
+            });
+            frame.setAttribute('data-wait-bound', 'true');
+          }
+          return frame;
+        }
+        function setDownloadToken(form) {
+          const token = String(Date.now()) + String(Math.random()).slice(2);
+          let input = form.querySelector('input[name="download_token"]');
+          if (!input) {
+            input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'download_token';
+            form.appendChild(input);
+          }
+          input.value = token;
+          return token;
+        }
+        function hasDownloadCookie(token) {
+          return document.cookie.split(';').map(function(item) { return item.trim(); }).indexOf('download_done=' + token) !== -1;
+        }
+        function clearDownloadCookie() {
+          document.cookie = 'download_done=; Max-Age=0; Path=/; SameSite=Lax';
+        }
+        function watchDownloadToken(token) {
+          if (downloadPollTimer) window.clearInterval(downloadPollTimer);
+          downloadPollTimer = window.setInterval(function() {
+            if (hasDownloadCookie(token)) {
+              clearDownloadCookie();
+              hideWait();
+            }
+          }, 400);
+        }
+        document.addEventListener('submit', function(event) {
+          if (event.defaultPrevented) return;
+          const form = event.target;
+          if (!form || form.getAttribute('data-no-wait') === 'true') return;
+          const button = event.submitter || form.querySelector('button[type="submit"], input[type="submit"]');
+          const message = form.getAttribute('data-wait-message') || (button && button.getAttribute('data-wait-message')) || 'Processing...';
+          const isDownloadWait = form.getAttribute('data-download-wait') === 'true' || (button && button.getAttribute('data-download-wait') === 'true');
+          if (isDownloadWait) {
+            form.target = waitFrame().name;
+            const downloadToken = setDownloadToken(form);
+            clearDownloadCookie();
+            watchDownloadToken(downloadToken);
+            waitingForDownload = true;
+          }
+          window.setTimeout(function() { showWait(message, button); }, 0);
+          waitTimer = window.setTimeout(hideWait, isDownloadWait ? 120000 : 45000);
+        }, true);
+        window.addEventListener('pageshow', hideWait);
+      })();
+      </script>
+    </body>
+    </html>

@@ -1,0 +1,364 @@
+<!doctype html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>Reports</title>
+      
+    <style>
+    :root {
+      --bg: #f6f8fb;
+      --panel: #ffffff;
+      --panel-soft: #f9fbfd;
+      --text: #17212f;
+      --muted: #667382;
+      --line: #dde5ee;
+      --line-strong: #c7d2df;
+      --blue: #2563eb;
+      --green: #11875d;
+      --gray: #697582;
+      --amber: #b7791f;
+      --red: #b42318;
+      --nav: #152238;
+      --navText: #eff4fb;
+      --focus: rgba(37, 99, 235, 0.22);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "Segoe UI", Arial, sans-serif; background: linear-gradient(180deg, #eef4fb 0, #f6f8fb 260px), var(--bg); color: var(--text); font-size: 14px; line-height: 1.45; }
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .topbar { background: var(--nav); color: var(--navText); padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; box-shadow: 0 8px 24px rgba(21, 34, 56, 0.16); }
+    .brand { font-size: 17px; font-weight: 700; letter-spacing: 0; white-space: nowrap; }
+    .nav { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .nav a, .nav button { color: var(--navText); background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.14); padding: 7px 11px; border-radius: 6px; cursor: pointer; font-size: 13px; text-decoration: none; transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease; }
+    .nav a:hover, .nav button:hover { background: rgba(255,255,255,0.16); border-color: rgba(255,255,255,0.28); text-decoration: none; }
+    .wrap { max-width: 1600px; margin: 0 auto; padding: 20px; }
+    .grid { display: grid; gap: 16px; }
+    .two-col { grid-template-columns: minmax(0, 1.7fr) minmax(360px, 1fr); align-items: start; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; box-shadow: 0 10px 24px rgba(21, 34, 56, 0.06); }
+    .panel h2, .panel h3 { margin: 0 0 10px; font-size: 18px; line-height: 1.25; }
+    .muted { color: var(--muted); }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, 108px); justify-content: start; gap: 8px; margin-bottom: 10px; }
+    .stat { border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; background: var(--panel-soft); display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 40px; white-space: nowrap; }
+    .stat .muted { font-size: 11px; font-weight: 600; }
+    .stat .value { font-size: 18px; font-weight: 700; margin-top: 0; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-bottom: 12px; }
+    label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+    input, select, textarea { width: 100%; border: 1px solid var(--line-strong); border-radius: 6px; padding: 9px 10px; font-size: 14px; background: white; color: var(--text); outline: none; }
+    input:focus, select:focus, textarea:focus { border-color: var(--blue); box-shadow: 0 0 0 3px var(--focus); }
+    input[type="checkbox"] { width: auto; }
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid transparent; border-radius: 6px; padding: 9px 12px; min-height: 38px; font-size: 14px; font-weight: 600; cursor: pointer; background: #dbe7f5; color: #10233d; text-decoration: none; white-space: nowrap; transition: filter 120ms ease, box-shadow 120ms ease; }
+    .btn:hover { filter: brightness(0.98); text-decoration: none; box-shadow: 0 5px 12px rgba(21, 34, 56, 0.10); }
+    .btn.primary { background: var(--blue); color: white; }
+    .btn.green { background: #0e9f6e; color: white; }
+    .btn.gray { background: #e6ebf2; color: #394b59; }
+    .btn.red { background: var(--red); color: white; }
+    .btn.amber { background: #d99a2b; color: white; }
+    .btn.ghost { background: transparent; border-color: var(--line); }
+    .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .action-panel { display: grid; grid-template-columns: max-content; gap: 10px; align-items: start; margin-bottom: 12px; }
+    .action-card { border: 1px solid var(--line); border-radius: 8px; background: var(--panel-soft); padding: 10px; }
+    .action-panel .action-card { border-width: 0.5px; border-color: #e6ebf2; }
+    .dashboard-filters { display: grid; grid-template-columns: repeat(2, 150px); gap: 10px; align-items: end; }
+    .dashboard-filters input, .dashboard-filters select { border-width: 0.5px; border-color: #dfe6ee; }
+    .selected-action-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .dashboard-side { margin-top: 0; }
+    .selected-action-meta { min-width: 180px; }
+    .action-buttons { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .action-buttons .btn { min-width: 110px; justify-content: center; }
+    .btn:disabled { background: #e7edf5 !important; color: #9aa7b6 !important; border-color: #d6deea !important; cursor: not-allowed; opacity: 1; box-shadow: none; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(164px, 1fr)); gap: 8px; }
+    .card { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #fff; display: grid; grid-template-columns: 52px minmax(0, 1fr); align-items: center; min-height: 0; padding: 5px; gap: 6px; transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease; }
+    .card-link { display: block; color: inherit; text-decoration: none; height: auto; }
+    .card-link:hover { text-decoration: none; }
+    .card-link:hover .card { border-color: #aab7c6; box-shadow: 0 8px 18px rgba(21, 34, 56, 0.10); transform: translateY(-1px); }
+    .card.present { border-color: #8fd3a5; background: #f2fbf5; }
+    .card.absent, .card.checkedout, .card.closed { background: #f7f8fa; color: #8b97a5; }
+    .card.closed { background: #fff8e8; border-color: #f0d38a; }
+    .card.selected { outline: 2px solid var(--blue); outline-offset: 1px; }
+    .card.absent .photo, .card.checkedout .photo, .card.closed .photo { filter: grayscale(1) opacity(0.42); }
+    .card.absent .name, .card.checkedout .name, .card.closed .name, .card.absent .class-tag, .card.checkedout .class-tag, .card.closed .class-tag, .card.absent .small, .card.checkedout .small, .card.closed .small { color: #8b97a5; }
+    .count-strip { display: flex; flex-wrap: wrap; gap: 3px; margin: 0 0 6px; }
+    .count-chip { border: 1px solid var(--line); border-radius: 999px; padding: 1px 6px; font-size: 11px; line-height: 1.1; background: #fff; color: var(--muted); }
+    .count-chip.strong { color: var(--text); font-weight: 700; }
+    .card .photo { width: 48px; height: 48px; background: #f2fbf5; display: flex; align-items: center; justify-content: center; overflow: hidden; padding: 0; border-radius: 50%; }
+    .card .photo img { width: 48px; height: 48px; border-radius: 50%; object-fit: cover; display: block; border: 2px solid #cde0f6; background: #e8f5ef; }
+    .card .content { padding: 0; display: grid; gap: 2px; min-width: 0; }
+    .name { font-weight: 700; line-height: 1.05; font-size: 12px; overflow-wrap: anywhere; }
+    .class-tag, .badge { display: inline-flex; width: fit-content; border-radius: 999px; padding: 0 4px; font-size: 10px; line-height: 1; border: 1px solid transparent; }
+    .class-tag { margin-top: 0; }
+    .badge.present { background: #d8f5e4; color: #0d6b39; }
+    .badge.absent { background: #eef2f6; color: #52616e; }
+    .badge.closed { background: #fff2c8; color: #8b5c00; }
+    .badge.checkedout { background: #eef2f6; color: #52616e; }
+    .badge.warn { background: #fff2f2; color: #9f1239; }
+    .selected-child-head { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: center; margin-bottom: 10px; }
+    .selected-child-head img { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); }
+    .selected-child-name { font-weight: 700; color: var(--text); }
+    .selected-child-head.absent img, .selected-child-head.closed img { filter: grayscale(1) opacity(0.45); }
+    .selected-child-head.absent .selected-child-name, .selected-child-head.closed .selected-child-name { color: #8b97a5; }
+    .selected-child-head .badge { margin-top: 6px; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border-bottom: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; font-size: 14px; }
+    th { background: var(--panel-soft); position: sticky; top: 0; z-index: 1; color: #4e5d6d; font-weight: 700; }
+    tbody tr:hover td { background: #fbfdff; }
+    .fiche th, .fiche td { text-align: center; min-width: 42px; }
+    .fiche .name-col { text-align: left; min-width: 220px; }
+    .fiche .week-col { min-width: 100px; }
+    .pill { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 28px; border-radius: 999px; font-weight: 700; }
+    .pill.P { background: #d8f5e4; color: #0d6b39; }
+    .pill.A { background: #eef2f6; color: #52616e; }
+    .pill.F { background: #fff2c8; color: #8b5c00; }
+    .login-box { max-width: 420px; margin: 72px auto; background: white; border: 1px solid var(--line); border-radius: 8px; padding: 24px; box-shadow: 0 16px 36px rgba(21, 34, 56, 0.12); }
+    .alert { padding: 10px 12px; border-radius: 6px; margin-bottom: 12px; border: 1px solid; font-weight: 600; }
+    .alert.info { background: #eef6ff; border-color: #bcd7ff; color: #0e3a66; }
+    .alert.warn { background: #fff8e6; border-color: #f0d38a; color: #7a4a00; }
+    .alert.error { background: #fff0f0; border-color: #f5b0b0; color: #921919; }
+    .small { font-size: 12px; }
+    .auto-hide { display: none !important; }
+    .right { text-align: right; }
+    .nowrap { white-space: nowrap; }
+    .muted-box { padding: 18px; background: #f7f9fc; border: 1px solid var(--line); border-radius: 6px; }
+    .user-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+    .file-grid, .mail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+    .file-card, .mail-card { border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 10px; }
+    .mail-recipient-layout { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(240px, 1.3fr); gap: 12px; align-items: start; }
+    .mail-send-to { min-height: 150px; border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 8px; display: flex; flex-direction: column; gap: 0; }
+    .mail-send-to-empty { color: var(--muted); font-size: 13px; padding: 6px 2px; }
+    .mail-recipient-pill { border: 1px solid var(--line); border-radius: 6px; background: #f8fafc; padding: 0 8px; text-align: left; cursor: pointer; font: inherit; line-height: 1.2; color: var(--text); }
+    .mail-recipient-pill:hover { background: #eef2ff; }
+    .mail-target-list { min-height: 150px; max-height: 260px; overflow-y: auto; border: 1px solid var(--line-strong); border-radius: 6px; background: #fff; }
+    .mail-target-row, .mail-target-head { display: grid; grid-template-columns: minmax(76px, 0.7fr) minmax(120px, 1fr) minmax(180px, 1.5fr); gap: 10px; align-items: center; width: 100%; padding: 0 10px; border: 0; border-bottom: 1px solid var(--line); background: #fff; color: var(--text); text-align: left; font: inherit; line-height: 1.2; }
+    .mail-target-head { position: sticky; top: 0; z-index: 1; background: var(--panel-soft); color: var(--muted); font-size: 12px; font-weight: 700; }
+    .mail-target-row { cursor: pointer; }
+    .mail-target-row:hover { background: #eef6ff; }
+    .mail-target-row span { min-width: 0; overflow-wrap: anywhere; }
+    .mail-target-empty { padding: 10px; color: var(--muted); font-size: 13px; }
+    @media (max-width: 1180px) { .two-col, .user-grid { grid-template-columns: 1fr; } .dashboard-side { margin-top: 0; } }
+    @media (max-width: 520px) {
+      .topbar { align-items: stretch; }
+      .brand { width: 100%; }
+      .nav { width: 100%; gap: 6px; }
+      .nav a, .nav button { flex: 1 1 auto; text-align: center; }
+      .wrap { padding: 12px; }
+      .panel { padding: 12px; }
+      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .cards { grid-template-columns: 1fr; }
+      .action-panel { grid-template-columns: 1fr; }
+      .dashboard-filters { grid-template-columns: 1fr; }
+      .mail-recipient-layout { grid-template-columns: 1fr; }
+    }
+    .wait-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: rgba(246, 248, 251, 0.72);
+      backdrop-filter: blur(2px);
+    }
+    .wait-overlay.show { display: flex; }
+    .wait-box {
+      width: min(360px, 100%);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: 0 18px 44px rgba(21, 34, 56, 0.18);
+      padding: 18px;
+      display: grid;
+      grid-template-columns: 34px 1fr;
+      gap: 12px;
+      align-items: center;
+    }
+    .wait-spinner {
+      width: 28px;
+      height: 28px;
+      border: 3px solid #dbe7f5;
+      border-top-color: var(--blue);
+      border-radius: 50%;
+      animation: wait-spin 0.8s linear infinite;
+    }
+    .wait-title { font-weight: 700; }
+    .wait-text { color: var(--muted); font-size: 13px; margin-top: 2px; }
+    .btn.busy { pointer-events: none; opacity: 0.82; }
+    @keyframes wait-spin { to { transform: rotate(360deg); } }
+    @media print { .topbar, .no-print { display: none !important; } body { background: white; } .wrap { max-width: none; padding: 0; } .panel { border: none; box-shadow: none; } }
+    </style>
+    
+    </head>
+    <body>
+      
+        <div class="topbar">
+          <div class="brand">Kindergarten Attendance Web</div>
+          <div class="nav">
+            <a href="http://127.0.0.1:8000/dashboard">Dashboard</a><a href="http://127.0.0.1:8000/profile">Profile</a><a href="http://127.0.0.1:8000/contacts">Contacts</a><a href="http://127.0.0.1:8000/files">Files</a><a href="http://127.0.0.1:8000/mail">Mail</a><a href="http://127.0.0.1:8000/reports">4-Week Fiche</a><a href="http://127.0.0.1:8000/audit">Logs</a><a href="http://127.0.0.1:8000/closed-dates">Closed Dates</a><a href="http://127.0.0.1:8000/users">Users</a><a href="http://127.0.0.1:8000/children">Children</a><form method="post" action="/logout" style="display:inline"><button type="submit">Logout</button></form>
+          </div>
+          <div class="small">Boss &middot; Boss</div>
+        </div>
+        
+      <div class="wrap">
+        
+        
+        <div class="panel no-print">
+          <h2>4-Week Fiche</h2>
+          <form method="get" action="/reports" class="toolbar" style="margin-bottom:0">
+            <div>
+              <label>Child</label>
+              <select name="person_id">
+                <option value="410" selected>CHILDREN1</option><option value="336" >Charles-Antoine Racine</option><option value="348" >Freyja Sunstrum</option><option value="350" >Henri Dupuis</option><option value="353" >Jacob Rivest</option><option value="363" >Jules Fortier</option><option value="386" >Médéric leblanc</option><option value="396" >Rose Drouin</option><option value="341" >Édouard Pelletier</option><option value="342" >Élianne Nadon</option><option value="344" >Éliot Paré-Moquin</option><option value="347" >Évan Papillon</option><option value="346" >Estelle Lépine</option><option value="352" >Jacob Lapierre</option><option value="366" >Laurence Paquette</option><option value="369" >Léonie Champagne</option><option value="384" >Maya Fortier</option><option value="394" >Rafaelle Le Roy</option><option value="398" >Sam Gagnon</option><option value="409" >Zelda Dean-Morse</option><option value="413" >CHILDREN2</option><option value="354" >Jamie Bouchard</option><option value="362" >Jules Faust-Boudreau</option><option value="374" >Livia Young</option><option value="377" >Louis Chamot</option><option value="367" >Léo Vanier</option><option value="388" >Mikaela Lévesque-St-Denis</option><option value="399" >Sammie Gagnon</option><option value="408" >Vitaly Miron</option><option value="333" >Béatrice Chalifoux</option><option value="338" >Charlotte St-Pierre</option><option value="349" >Gaël Rocheleau</option><option value="364" >Julius Bazinet</option><option value="379" >Lyana Lachaine</option><option value="392" >Oscar Lafrenière</option><option value="393" >Philippe Morin-Laflamme</option><option value="405" >Victor Langlois</option><option value="327" >Alex Richer</option><option value="329" >Alyssa Gosselin- Martel</option><option value="334" >Benjamin Fortin</option><option value="345" >Ella Coté-Rodriguez</option><option value="351" >Isla Lamantia</option><option value="361" >Jules Champagne</option><option value="372" >Liam Labbé</option><option value="373" >Liam Leblanc</option><option value="380" >Lyla Bergeron</option><option value="383" >Maxim Rouleau</option><option value="389" >Mohamed Balde</option><option value="390" >Mylan Staples</option><option value="397" >Rosie Chalifour</option><option value="402" >Simone Papillon</option><option value="403" >Suzie Dean Morse</option><option value="404" >Théodore Chamot-Winterhalter</option><option value="340" >Daphney Cyr</option><option value="356" >Jayden Morin</option><option value="357" >Jayssen Bouchard</option><option value="365" >Kaylie Derome Plante</option><option value="378" >Louis Lamarche</option><option value="391" >Nathan Suengas Francois</option><option value="331" >Audélie Girard</option><option value="337" >Charlie Tessier</option><option value="339" >Christian Ethier</option><option value="375" >Loic Cyr</option><option value="376" >Lou Du sablon</option><option value="400" >Samuelle Racine</option><option value="401" >Sarah Spidus</option><option value="406" >Victor Pelletier</option><option value="328" >Alice Labbé</option><option value="330" >Angelyka Derome Plante</option><option value="335" >Calypso Moreau</option><option value="343" >Eliot Bouchard</option><option value="359" >Jenny David</option><option value="360" >Jérôme Breault</option><option value="370" >Lévi Guilbault</option><option value="371" >Lévi Mallette Glatz</option><option value="382" >Maude Brisebois</option><option value="395" >Robin Bergeron</option><option value="332" >Béatrice Breault</option><option value="355" >Jamie Dumoulin-Laurin</option><option value="358" >Jeannine Pioger</option><option value="368" >Léonie Bouchard</option><option value="385" >Maylee Kennedy</option><option value="381" >Maély Grégoire</option><option value="387" >Mélya Dansereau</option><option value="407" >Victoria Perreault-Lafortune</option>
+              </select>
+            </div>
+            <div>
+              <label>Date</label>
+              <input type="date" name="date" value="2026-06-26">
+            </div>
+            <div>
+              <label>Format</label>
+              <select name="format">
+                <option value="detailed" selected>Detailed 4 week</option>
+                <option value="summary" >Summary 4 week</option>
+              </select>
+            </div>
+            <div>
+              <button class="btn primary" type="submit" name="generate" value="1" data-wait-message="Generating PDF..." data-wait-text="Generating..." data-download-wait="true">Generate PDF</button>
+            </div>
+          </form>
+        </div>
+        <div class="panel" style="margin-top:16px">
+          <div class="muted small">Child: CHILDREN1 &middot; Class: Les Abeilles &middot; Start: 2026-06-22</div>
+          
+            <table class="fiche">
+              <thead>
+                <tr><th class="name-col">Child</th><th>06/22</th><th>06/23</th><th>06/24</th><th>06/25</th><th>06/26</th><th>06/27</th><th>06/28</th><th>06/29</th><th>06/30</th><th>07/01</th><th>07/02</th><th>07/03</th><th>07/04</th><th>07/05</th><th>07/06</th><th>07/07</th><th>07/08</th><th>07/09</th><th>07/10</th><th>07/11</th><th>07/12</th><th>07/13</th><th>07/14</th><th>07/15</th><th>07/16</th><th>07/17</th><th>07/18</th><th>07/19</th></tr>
+              </thead>
+              <tbody><tr><td class='name-col'>CHILDREN1</td><td><span class="pill P">P</span></td><td><span class="pill A">A</span></td><td><span class="pill A">A</span></td><td><span class="pill P">P</span></td><td><span class="pill A">A</span></td><td><span class="pill A">A</span></td><td><span class="pill A">A</span></td><td><span class="pill A">A</span></td><td><span class="pill A">A</span></td><td><span class="pill A">A</span></td><td><span class="pill A">A</span></td><td><span class="pill A">A</span></td><td><span class="pill A">A</span></td><td><span class="pill A">A</span></td><td><span class="pill A">A</span></td><td><span class="pill A">A</span></td><td><span class="pill A">A</span></td><td><span class="pill A">A</span></td><td><span class="pill A">A</span></td><td><span class="pill A">A</span></td><td><span class="pill A">A</span></td><td><span class="pill A">A</span></td><td><span class="pill A">A</span></td><td><span class="pill A">A</span></td><td><span class="pill A">A</span></td><td><span class="pill A">A</span></td><td><span class="pill A">A</span></td><td><span class="pill A">A</span></td></tr></tbody>
+            </table>
+            
+        </div>
+        
+      </div>
+      <div class="wait-overlay" id="wait-overlay" role="status" aria-live="polite" aria-hidden="true">
+        <div class="wait-box">
+          <div class="wait-spinner" aria-hidden="true"></div>
+          <div>
+            <div class="wait-title" id="wait-title">Processing...</div>
+            <div class="wait-text" id="wait-text">Please wait. Do not click again.</div>
+          </div>
+        </div>
+      </div>
+      <iframe id="wait-download-frame" name="wait-download-frame" style="display:none" title="Download result"></iframe>
+      <script>
+      (function() {
+        const overlay = document.getElementById('wait-overlay');
+        const title = document.getElementById('wait-title');
+        const text = document.getElementById('wait-text');
+        let activeButton = null;
+        let originalButtonText = '';
+        let waitTimer = null;
+        let downloadPollTimer = null;
+        let waitingForDownload = false;
+        function hideWait() {
+          if (!overlay) return;
+          overlay.classList.remove('show');
+          overlay.setAttribute('aria-hidden', 'true');
+          if (waitTimer) {
+            window.clearTimeout(waitTimer);
+            waitTimer = null;
+          }
+          if (downloadPollTimer) {
+            window.clearInterval(downloadPollTimer);
+            downloadPollTimer = null;
+          }
+          waitingForDownload = false;
+          if (activeButton) {
+            activeButton.classList.remove('busy');
+            activeButton.removeAttribute('aria-busy');
+            if (originalButtonText) activeButton.textContent = originalButtonText;
+          }
+          activeButton = null;
+          originalButtonText = '';
+        }
+        function showWait(message, button) {
+          if (!overlay) return;
+          title.textContent = message || 'Processing...';
+          text.textContent = 'Please wait. Do not click again.';
+          overlay.classList.add('show');
+          overlay.setAttribute('aria-hidden', 'false');
+          if (button) {
+            activeButton = button;
+            originalButtonText = button.textContent;
+            button.classList.add('busy');
+            button.setAttribute('aria-busy', 'true');
+            button.textContent = button.getAttribute('data-wait-text') || message || 'Processing...';
+          }
+        }
+        function waitFrame() {
+          let frame = document.getElementById('wait-download-frame');
+          if (!frame) {
+            frame = document.createElement('iframe');
+            frame.id = 'wait-download-frame';
+            frame.name = 'wait-download-frame';
+            frame.style.display = 'none';
+            frame.title = 'Download result';
+            document.body.appendChild(frame);
+          }
+          if (frame.getAttribute('data-wait-bound') !== 'true') {
+            frame.addEventListener('load', function() {
+              if (waitingForDownload) hideWait();
+            });
+            frame.setAttribute('data-wait-bound', 'true');
+          }
+          return frame;
+        }
+        function setDownloadToken(form) {
+          const token = String(Date.now()) + String(Math.random()).slice(2);
+          let input = form.querySelector('input[name="download_token"]');
+          if (!input) {
+            input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'download_token';
+            form.appendChild(input);
+          }
+          input.value = token;
+          return token;
+        }
+        function hasDownloadCookie(token) {
+          return document.cookie.split(';').map(function(item) { return item.trim(); }).indexOf('download_done=' + token) !== -1;
+        }
+        function clearDownloadCookie() {
+          document.cookie = 'download_done=; Max-Age=0; Path=/; SameSite=Lax';
+        }
+        function watchDownloadToken(token) {
+          if (downloadPollTimer) window.clearInterval(downloadPollTimer);
+          downloadPollTimer = window.setInterval(function() {
+            if (hasDownloadCookie(token)) {
+              clearDownloadCookie();
+              hideWait();
+            }
+          }, 400);
+        }
+        document.addEventListener('submit', function(event) {
+          if (event.defaultPrevented) return;
+          const form = event.target;
+          if (!form || form.getAttribute('data-no-wait') === 'true') return;
+          const button = event.submitter || form.querySelector('button[type="submit"], input[type="submit"]');
+          const message = form.getAttribute('data-wait-message') || (button && button.getAttribute('data-wait-message')) || 'Processing...';
+          const isDownloadWait = form.getAttribute('data-download-wait') === 'true' || (button && button.getAttribute('data-download-wait') === 'true');
+          if (isDownloadWait) {
+            form.target = waitFrame().name;
+            const downloadToken = setDownloadToken(form);
+            clearDownloadCookie();
+            watchDownloadToken(downloadToken);
+            waitingForDownload = true;
+          }
+          window.setTimeout(function() { showWait(message, button); }, 0);
+          waitTimer = window.setTimeout(hideWait, isDownloadWait ? 120000 : 45000);
+        }, true);
+        window.addEventListener('pageshow', hideWait);
+      })();
+      </script>
+    </body>
+    </html>

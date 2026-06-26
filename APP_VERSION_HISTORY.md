@@ -1,0 +1,47 @@
+# App Version History
+
+- `v20260624-001` - 2026-06-24 11:27:59 - baseline after current dashboard and CHILDREN1 photo changes - 445 files - `.app_versions/v20260624-001.zip`
+- `v20260624-002` - 2026-06-24 11:36:47 - before: apply requirment.3.txt - 446 files - `.app_versions/v20260624-002.zip`
+- `v20260624-003` - 2026-06-24 12:03:47 - before: fix app.py error shown in MODIFY.PNG - 446 files - `.app_versions/v20260624-003.zip`
+- `v20260624-004` - 2026-06-24 12:14:41 - before: fix profile phone email saving - 446 files - `.app_versions/v20260624-004.zip`
+- `v20260624-005` - 2026-06-24 12:24:45 - before: verify and fix self profile saving - 446 files - `.app_versions/v20260624-005.zip`
+- `v20260624-006` - 2026-06-24 12:32:32 - before: diagnose profile not saving in running app - 449 files - `.app_versions/v20260624-006.zip`
+- `v20260624-007` - 2026-06-24 12:43:58 - before: mail recipient email selection and sent status - 449 files - `.app_versions/v20260624-007.zip`
+- `v20260624-008` - 2026-06-24 12:48:36 - before: diagnose mail send failure - 449 files - `.app_versions/v20260624-008.zip`
+- `v20260624-009` - 2026-06-24 12:56:09 - before: clarify real email sending - 449 files - `.app_versions/v20260624-009.zip`
+- `v20260624-010` - 2026-06-24 13:10:29 - before: create child accounts for CHILDREN1 and Henri Dupuis - 450 files - `.app_versions/v20260624-010.zip`
+- `v20260624-011` - 2026-06-24 13:18:45 - before: child account simplified pages - 450 files - `.app_versions/v20260624-011.zip`
+- `v20260624-012` - 2026-06-24 13:25:23 - before: make child account page directly show profile files mail - 452 files - `.app_versions/v20260624-012.zip`
+- `v20260624-013` - 2026-06-24 13:30:14 - before: remove boss recipient from child mail - 452 files - `.app_versions/v20260624-013.zip`
+- `v20260624-014` - 2026-06-24 13:33:28 - before: remove boss email from child visible list - 452 files - `.app_versions/v20260624-014.zip`
+- `v20260624-015` - 2026-06-24 13:39:12 - before: change target email to dropdown - 452 files - `.app_versions/v20260624-015.zip`
+- `v20260624-016` - 2026-06-24 13:49:49 - before: update mail recipient role rules - 452 files - `.app_versions/v20260624-016.zip`
+- `v20260624-017` - 2026-06-24 13:56:05 - before: group target email dropdown by role - 452 files - `.app_versions/v20260624-017.zip`
+- `v20260624-018` - 2026-06-24 14:00:46 - before: allow multiple email recipients - 452 files - `.app_versions/v20260624-018.zip`
+- `v20260625-001` - 2026-06-25 01:50:41 - before restoring profile files mail routes - 492 files - `.app_versions/v20260625-001.zip`
+
+- v20260625-003 (2026-06-25 07:38:43) - backup current web version with profile files mail updates - 533 files - .app_versions/v20260625-003.zip
+
+- v20260625-004 (2026-06-25 08:05:30) - backup current web version after child dashboard and child mail privacy updates - 533 files - .app_versions/v20260625-004.zip
+- `v20260625-005` - 2026-06-25 22:51:21 - backup current web version after contacts list files privacy and mail recipient updates - 514 files - `.app_versions/v20260625-005.zip`
+- `v20260626-001` - 2026-06-26 07:59:49 - before UI test and polish - 515 files - `.app_versions/v20260626-001.zip`
+- `v20260626-002` - 2026-06-26 08:11:41 - after UI test and polish - 516 files - `.app_versions/v20260626-002.zip`
+- `v20260626-003` - 2026-06-26 08:12:18 - after UI polish final clean - 515 files - `.app_versions/v20260626-003.zip`
+- `v20260626-004` - 2026-06-26 08:21:06 - before submit waiting indicator - 516 files - `.app_versions/v20260626-004.zip`
+- `v20260626-005` - 2026-06-26 08:23:13 - after submit waiting indicator - 516 files - `.app_versions/v20260626-005.zip`
+- `v20260626-006` - 2026-06-26 08:28:57 - before close wait on generated result - 517 files - `.app_versions/v20260626-006.zip`
+- `v20260626-007` - 2026-06-26 08:34:47 - after auto close wait on generated result - 517 files - `.app_versions/v20260626-007.zip`
+- `v20260626-008` - 2026-06-26 08:37:35 - before restrict logs to principal - 518 files - `.app_versions/v20260626-008.zip`
+- `v20260626-009` - 2026-06-26 08:39:26 - after restrict logs to principal - 518 files - `.app_versions/v20260626-009.zip`
+- `v20260626-010` - 2026-06-26 08:58:45 - before restrict logs to boss - 519 files - `.app_versions/v20260626-010.zip`
+- `v20260626-011` - 2026-06-26 09:00:10 - after restrict logs to boss - 519 files - `.app_versions/v20260626-011.zip`
+- `v20260626-012` - 2026-06-26 09:38:04 - before restrict attendance history panel - 530 files - `.app_versions/v20260626-012.zip`
+- `v20260626-013` - 2026-06-26 09:40:27 - after restrict attendance history panel - 530 files - `.app_versions/v20260626-013.zip`
+- `v20260626-014` - 2026-06-26 09:49:40 - before shrink files image previews - 531 files - `.app_versions/v20260626-014.zip`
+- `v20260626-015` - 2026-06-26 09:50:26 - after shrink files image previews - 531 files - `.app_versions/v20260626-015.zip`
+- `v20260626-016` - 2026-06-26 09:56:32 - after clean service port references - 531 files - `.app_versions/v20260626-016.zip`
+- `v20260626-017` - 2026-06-26 10:01:36 - manual backup current version - 532 files - `.app_versions/v20260626-017.zip`
+- `v20260626-018` - 2026-06-26 10:21:36 - 4-week fiche calendar preview - 532 files - `.app_versions/v20260626-018.zip`
+- `v20260626-019` - 2026-06-26 10:30:08 - compact gray fiche calendar styling - 532 files - `.app_versions/v20260626-019.zip`
+- `v20260626-020` - 2026-06-26 10:38:29 - auto refresh fiche preview on date change - 533 files - `.app_versions/v20260626-020.zip`
+- `v20260626-021` - 2026-06-26 10:44:53 - half width fiche calendar preview - 533 files - `.app_versions/v20260626-021.zip`

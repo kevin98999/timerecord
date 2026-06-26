@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>网页托管服务商推荐与价格对比</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 18mm 16mm;
+    }
+
+    body {
+      margin: 0;
+      color: #1f2933;
+      font-family: "Microsoft YaHei", "Segoe UI", Arial, sans-serif;
+      line-height: 1.62;
+      font-size: 12.5px;
+    }
+
+    h1 {
+      margin: 0 0 6px;
+      font-size: 25px;
+      line-height: 1.25;
+      color: #102a43;
+    }
+
+    h2 {
+      margin: 24px 0 8px;
+      font-size: 17px;
+      color: #243b53;
+      border-bottom: 1px solid #d9e2ec;
+      padding-bottom: 5px;
+    }
+
+    h3 {
+      margin: 14px 0 4px;
+      font-size: 14px;
+      color: #334e68;
+    }
+
+    p {
+      margin: 7px 0;
+    }
+
+    .meta {
+      color: #627d98;
+      margin-bottom: 18px;
+    }
+
+    .summary {
+      background: #f0f4f8;
+      border-left: 4px solid #2f80ed;
+      padding: 10px 12px;
+      margin: 14px 0 18px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 10px 0 16px;
+      table-layout: fixed;
+    }
+
+    th,
+    td {
+      border: 1px solid #cbd5e1;
+      padding: 8px;
+      vertical-align: top;
+      word-break: break-word;
+    }
+
+    th {
+      background: #e6eef8;
+      color: #102a43;
+      text-align: left;
+      font-weight: 700;
+    }
+
+    ul {
+      margin: 6px 0 10px 20px;
+      padding: 0;
+    }
+
+    li {
+      margin: 4px 0;
+    }
+
+    .callout {
+      background: #fff7e6;
+      border: 1px solid #f0c36d;
+      padding: 10px 12px;
+      margin: 14px 0;
+    }
+
+    .source-list {
+      font-size: 11px;
+      color: #486581;
+    }
+  </style>
+</head>
+<body>
+  <h1>网页托管服务商推荐与价格对比</h1>
+  <p class="meta">整理日期：2026-06-23。适用场景：将本地生成的静态网页、前端单页应用或轻量 Web 项目迁移到第三方托管平台。</p>
+
+  <div class="summary">
+    <strong>结论：</strong>如果只是托管静态网页，优先选 Cloudflare Pages；如果是 React 或 Next.js 项目，优先选 Vercel；如果希望部署流程简单且带表单等网站功能，可以选 Netlify；如果项目已在 GitHub 且追求最低成本，可选 GitHub Pages。
+  </div>
+
+  <h2>推荐服务商</h2>
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 18%;">服务商</th>
+        <th style="width: 30%;">适合场景</th>
+        <th style="width: 32%;">价格概况</th>
+        <th style="width: 20%;">建议</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Cloudflare Pages</strong></td>
+        <td>静态网页、前端单页应用、需要全球 CDN、免费额度较宽的项目。</td>
+        <td>Free 计划可用；官方限制页显示免费计划每月 500 次构建、每项目最多 100 个自定义域名、单站最多 20,000 文件。</td>
+        <td>最推荐作为静态网页托管首选。</td>
+      </tr>
+      <tr>
+        <td><strong>Vercel</strong></td>
+        <td>React、Next.js、需要预览部署、自动 CI/CD 的前端项目。</td>
+        <td>Hobby 免费；Pro 官方标价为 $20/月，且可能按额外使用量计费。</td>
+        <td>前端框架项目体验最好。</td>
+      </tr>
+      <tr>
+        <td><strong>Netlify</strong></td>
+        <td>静态站、表单、Git 自动部署、非复杂后端项目。</td>
+        <td>有免费计划；付费计划适合更高用量和团队协作。具体额度按官方 pricing 页面为准。</td>
+        <td>适合内容站、小型企业官网。</td>
+      </tr>
+      <tr>
+        <td><strong>GitHub Pages</strong></td>
+        <td>公共仓库、项目文档、纯 HTML/CSS/JS 页面。</td>
+        <td>GitHub Pages 是静态站托管服务，通常可免费用于公共仓库和项目页面；可绑定自定义域名。</td>
+        <td>最低成本，但功能最简单。</td>
+      </tr>
+      <tr>
+        <td><strong>Render Static Sites</strong></td>
+        <td>静态站，同时未来可能部署后端服务、数据库或 API。</td>
+        <td>Render pricing 页面显示 Hobby $0/月，Pro $25/月起；Web Services 另有实例计费。</td>
+        <td>适合后续扩展到全栈部署。</td>
+      </tr>
+      <tr>
+        <td><strong>Firebase Hosting</strong></td>
+        <td>需要接 Firebase 登录、数据库、云函数、Google 生态服务。</td>
+        <td>Spark 免费计划；Blaze 按量付费。Firebase pricing 页面显示 App Hosting 在 Blaze 下有免费额度后按流量和存储计费。</td>
+        <td>适合未来要做用户系统或数据功能。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>按需求选择</h2>
+  <ul>
+    <li><strong>只托管静态网页：</strong>Cloudflare Pages。免费额度大、速度好、自定义域名方便。</li>
+    <li><strong>React / Next.js 项目：</strong>Vercel。部署体验和预览链接最成熟。</li>
+    <li><strong>需要表单、CMS 或站点工作流：</strong>Netlify。对营销页、展示站比较友好。</li>
+    <li><strong>项目已经在 GitHub，预算最低：</strong>GitHub Pages。适合纯静态页面和文档。</li>
+    <li><strong>后续可能加后端/API：</strong>Render 或 Firebase。Render 更通用，Firebase 更偏 Google 生态。</li>
+  </ul>
+
+  <div class="callout">
+    <strong>额外费用提醒：</strong>如果要使用自己的域名，通常还需要购买域名。常见 .com 域名大约每年 $10-20，具体价格取决于注册商和促销活动。托管平台大多会免费提供 SSL 证书。
+  </div>
+
+  <h2>推荐优先级</h2>
+  <ol>
+    <li><strong>Cloudflare Pages：</strong>默认首选，适合绝大多数静态网页迁移。</li>
+    <li><strong>Vercel：</strong>如果项目是 Next.js 或现代前端框架，优先考虑。</li>
+    <li><strong>Netlify：</strong>如果看重站点功能、表单和易用控制台，可以选择。</li>
+    <li><strong>GitHub Pages：</strong>如果只要免费、简单、公开仓库部署，够用。</li>
+    <li><strong>Render / Firebase：</strong>当网站未来要扩展后端能力时再考虑。</li>
+  </ol>
+
+  <h2>资料来源</h2>
+  <ul class="source-list">
+    <li>Vercel Pricing: https://vercel.com/pricing</li>
+    <li>Netlify Pricing: https://www.netlify.com/pricing/</li>
+    <li>Cloudflare Pages Limits: https://developers.cloudflare.com/pages/platform/limits/</li>
+    <li>Cloudflare Plans: https://www.cloudflare.com/plans/application-services/</li>
+    <li>GitHub Pages Docs: https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages</li>
+    <li>Render Pricing: https://render.com/pricing</li>
+    <li>Firebase Pricing: https://firebase.google.com/pricing</li>
+  </ul>
+</body>
+</html>
