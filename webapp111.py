@@ -18,17 +18,15 @@ import sqlite3
 import sys
 import socket
 import threading
-import time
 import unicodedata
 import xml.etree.ElementTree as ET
 import zipfile
-from PIL import Image, ImageOps, UnidentifiedImageError
 from datetime import datetime, timedelta, date, timezone
 from email.message import EmailMessage
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PureWindowsPath
-from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 try:
@@ -58,36 +56,26 @@ DAILY_EXPORT_DIR = DATA_DIR / "daily_exports"
 FORM_DIR = DATA_DIR / "form"
 USER_FILES_DIR = DATA_DIR / "user_folders"
 MOBILE_FACE_SNAPSHOT_DIR = DATA_DIR / "mobile_face_snapshots"
-PROJECT_LOGO_DIR = DATA_DIR / "project_logos"
-PROJECT_GROUP_ICON_DIR = DATA_DIR / "project_group_icons"
 FACE_DIR = DATA_DIR / "faces"
 FACE_DETECTOR_CACHE = None
 FACE_FEATURE_CACHE = {}
 SETTINGS_PATH = DATA_DIR / "settings.json"
-APP_BACKGROUND_PATH = BASE_DIR / "backroud.png"
-APP_BACKGROUND_OPACITY_SETTING = "app_background_opacity_percent"
-APP_BACKGROUND_DEFAULT_OPACITY = 50
-TEXT_WINDOW_OPACITY_SETTING = "text_window_background_opacity_percent"
-TEXT_WINDOW_DEFAULT_OPACITY = 72
 SECRET_PATH = DATA_DIR / "webapp_secret.txt"
 SESSION_TTL_DAYS = 7
 PASSWORD_ROTATION_DAYS = 30
-LOGIN_MAX_FAILED_ATTEMPTS = 5
-LOGIN_LOCK_MINUTES = 15
 CONNECTION_APPROVAL_HOURS = 5
 CONNECTION_DEVICE_COOKIE = "connection_device"
 FLASH_MESSAGES = {}
 PUBLIC_CONTACT_LAST_SUBMISSION = {}
 PUBLIC_CONTACT_LOCK = threading.Lock()
 DEFAULT_PORT = 8000
-SLOW_REQUEST_LOG_MS = 500.0
 DEFAULT_HOST = "0.0.0.0"
-FACE_MATCH_THRESHOLD = 0.35  # Staff mobile face attendance only.
+FACE_MATCH_THRESHOLD = 0.25
 DESKTOP_SYNC_TOKEN_SETTING = "desktop_sync_token"
 DESKTOP_SYNC_TOKEN_ENV = "TIMERECORD_DESKTOP_SYNC_TOKEN"
-TEACHER_DAILY_CLOSEOUT_TIME = "23:30:00"
+TEACHER_DAILY_CLOSEOUT_TIME = "23:50"
 DEFAULT_PROJECT_NAME = "Projet principal"
-PWA_MANIFEST_VERSION = "20260718-deleted-employee-work-hours"
+PWA_MANIFEST_VERSION = "20260711-window-title"
 SUPER_ADMIN_USERNAMES_ENV = "TIMERECORD_SUPER_ADMIN_USERS"
 SUPER_ADMIN_DEFAULT_USERNAMES = {"boss"}
 PROJECT_CONTEXT_COOKIE = "admin_project_id"
@@ -238,17 +226,14 @@ def ensure_dirs():
     FORM_DIR.mkdir(exist_ok=True)
     USER_FILES_DIR.mkdir(exist_ok=True)
     MOBILE_FACE_SNAPSHOT_DIR.mkdir(exist_ok=True)
-    PROJECT_LOGO_DIR.mkdir(exist_ok=True)
-    PROJECT_GROUP_ICON_DIR.mkdir(exist_ok=True)
 
 
 def connect_db():
     ensure_dirs()
-    conn = sqlite3.connect(DB_PATH, timeout=30.0)
+    conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout = 30000")
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA synchronous = NORMAL")
+    conn.execute("PRAGMA journal_mode=OFF")
+    conn.execute("PRAGMA synchronous=OFF")
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
@@ -268,24 +253,6 @@ def save_settings(settings):
             json.dump(settings, fh, indent=2, ensure_ascii=False)
     except OSError:
         pass
-
-
-def app_background_opacity_percent(settings=None):
-    values = settings if isinstance(settings, dict) else load_settings()
-    try:
-        opacity = int(str(values.get(APP_BACKGROUND_OPACITY_SETTING, APP_BACKGROUND_DEFAULT_OPACITY)).strip())
-    except (TypeError, ValueError):
-        opacity = APP_BACKGROUND_DEFAULT_OPACITY
-    return max(0, min(100, opacity))
-
-
-def text_window_opacity_percent(settings=None):
-    values = settings if isinstance(settings, dict) else load_settings()
-    try:
-        opacity = int(str(values.get(TEXT_WINDOW_OPACITY_SETTING, TEXT_WINDOW_DEFAULT_OPACITY)).strip())
-    except (TypeError, ValueError):
-        opacity = TEXT_WINDOW_DEFAULT_OPACITY
-    return max(0, min(100, opacity))
 
 
 def table_columns(conn, table_name):
@@ -389,112 +356,6 @@ def current_project_name(user):
         return project["name"] if project else DEFAULT_PROJECT_NAME
 
 
-def project_logo_url(project):
-    if not project or "logo_path" not in project.keys() or not project["logo_path"]:
-        return ""
-    candidate = Path(project["logo_path"])
-    if not candidate.is_absolute():
-        candidate = BASE_DIR / candidate
-    try:
-        resolved = candidate.resolve()
-        resolved.relative_to(PROJECT_LOGO_DIR.resolve())
-    except (OSError, ValueError):
-        return ""
-    if not resolved.is_file():
-        return ""
-    return "/media/" + file_path_token(resolved)
-
-
-def current_project_brand(user):
-    if not user:
-        return "PITIT PAS SYSTEM", ""
-    with connect_db() as conn:
-        project = current_project(conn, user)
-        if not project:
-            return DEFAULT_PROJECT_NAME, ""
-        return project["name"], project_logo_url(project)
-
-
-def save_project_logo(project_id, upload):
-    content = upload.get("content") or b""
-    if not content:
-        raise ValueError("Veuillez choisir une image.")
-    if len(content) > 5 * 1024 * 1024:
-        raise ValueError("Le logo ne peut pas dépasser 5 Mo.")
-    try:
-        with Image.open(io.BytesIO(content)) as source:
-            source.load()
-            if source.width < 64 or source.height < 64:
-                raise ValueError("Le logo doit mesurer au moins 64 × 64 pixels.")
-            image = ImageOps.exif_transpose(source).convert("RGBA")
-            image = ImageOps.fit(image, (512, 512), method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
-            background = Image.new("RGBA", image.size, "white")
-            background.alpha_composite(image)
-            destination = PROJECT_LOGO_DIR / f"project_{int(project_id)}.png"
-            background.convert("RGB").save(destination, "PNG", optimize=True)
-    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
-        raise ValueError("Le fichier sélectionné n'est pas une image valide.") from exc
-    return str(destination.resolve())
-
-
-def group_icon_match_key(value):
-    normalized = unicodedata.normalize("NFKD", str(value or ""))
-    ascii_text = "".join(char for char in normalized if not unicodedata.combining(char))
-    return " ".join(re.findall(r"[A-Z0-9]+", ascii_text.upper()))
-
-
-def group_icon_path(project_id, group_name):
-    return PROJECT_GROUP_ICON_DIR / f"project_{int(project_id)}" / f"{safe_filename(group_name)}.png"
-
-
-def group_icon_url(project_id, group_name):
-    path = group_icon_path(project_id, group_name)
-    return "/media/" + file_path_token(path) if path.is_file() else ""
-
-
-def import_group_icon_uploads(conn, handler, actor, uploads, group_names):
-    project_id = effective_project_id(conn, actor)
-    normalized_groups = [(group, group_icon_match_key(group)) for group in group_names if group_icon_match_key(group)]
-    imported = 0
-    skipped = 0
-    matched = []
-    for upload in uploads:
-        filename = uploaded_filename_basename(upload.get("filename") or "")
-        content = upload.get("content") or b""
-        file_key = group_icon_match_key(Path(filename).stem)
-        if not filename or not content or not file_key or len(content) > 5 * 1024 * 1024:
-            skipped += 1
-            continue
-        exact = [group for group, key in normalized_groups if key == file_key]
-        contained = [group for group, key in normalized_groups if f" {file_key} " in f" {key} "]
-        candidates = exact or contained
-        if len(candidates) != 1:
-            skipped += 1
-            continue
-        group_name = candidates[0]
-        try:
-            with Image.open(io.BytesIO(content)) as source:
-                source.load()
-                image = ImageOps.exif_transpose(source).convert("RGBA")
-                image.thumbnail((232, 232), Image.Resampling.LANCZOS)
-                canvas = Image.new("RGBA", (256, 256), (255, 255, 255, 0))
-                canvas.alpha_composite(image, ((256 - image.width) // 2, (256 - image.height) // 2))
-                destination = group_icon_path(project_id, group_name)
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                canvas.save(destination, "PNG", optimize=True)
-        except (UnidentifiedImageError, OSError, Image.DecompressionBombError):
-            skipped += 1
-            continue
-        audit_request(
-            handler, conn, actor["id"], "import_group_icon", "group",
-            object_id=group_name,
-            details={"filename": filename, "group_name": group_name, "project_id": project_id},
-        )
-        imported += 1
-        matched.append((filename, group_name))
-    return imported, skipped, matched
-
-
 def project_filter(conn, user, alias=None):
     column = f"{alias}.project_id" if alias else "project_id"
     return f"{column} = ?", [effective_project_id(conn, user)]
@@ -551,109 +412,6 @@ def load_secret():
 APP_SECRET = load_secret().encode("utf-8")
 
 
-def csrf_token_for_user(user):
-    if not user:
-        return ""
-    fingerprint = str(user.get("password_fingerprint", "") if hasattr(user, "get") else user["password_fingerprint"] or "")
-    message = f"csrf:{int(user['id'])}:{fingerprint}".encode("utf-8")
-    return hmac.new(APP_SECRET, message, hashlib.sha256).hexdigest()
-
-
-def csrf_hidden_input(user):
-    token = csrf_token_for_user(user)
-    return f'<input type="hidden" name="csrf_token" value="{html.escape(token, quote=True)}">' if token else ""
-
-
-def inject_csrf_into_post_forms(markup, user):
-    token_input = csrf_hidden_input(user)
-    if not token_input or not markup:
-        return markup
-    pattern = re.compile(r"(<form\b(?=[^>]*\bmethod\s*=\s*[\"']?post\b)[^>]*>)", re.IGNORECASE)
-    return pattern.sub(lambda match: match.group(1) + token_input, markup)
-
-
-def csrf_fetch_bootstrap(user):
-    token = csrf_token_for_user(user)
-    if not token:
-        return ""
-    encoded = json.dumps(token)
-    return f"""
-    <meta name="csrf-token" content="{html.escape(token, quote=True)}">
-    <script>
-    (function() {{
-      const csrfToken = {encoded};
-      window.PititPasCsrfToken = csrfToken;
-      function protectForm(form) {{
-        if (!form || String(form.method || 'get').toUpperCase() !== 'POST') return;
-        let target;
-        try {{ target = new URL(form.action || window.location.href, window.location.href); }} catch (_error) {{ return; }}
-        if (target.origin !== window.location.origin || form.querySelector('input[name=csrf_token]')) return;
-        const input = document.createElement('input');
-        input.type = 'hidden';
-        input.name = 'csrf_token';
-        input.value = csrfToken;
-        form.appendChild(input);
-      }}
-      document.addEventListener('submit', function(event) {{ protectForm(event.target); }}, true);
-      const nativeSubmit = HTMLFormElement.prototype.submit;
-      HTMLFormElement.prototype.submit = function() {{
-        protectForm(this);
-        return nativeSubmit.call(this);
-      }};
-      const nativeFetch = window.fetch.bind(window);
-      window.fetch = function(input, init) {{
-        const options = Object.assign({{}}, init || {{}});
-        const request = input instanceof Request ? input : null;
-        const method = String(options.method || (request && request.method) || 'GET').toUpperCase();
-        let target;
-        try {{ target = new URL(request ? request.url : String(input), window.location.href); }} catch (_error) {{ return nativeFetch(input, init); }}
-        if (target.origin === window.location.origin && !['GET', 'HEAD', 'OPTIONS'].includes(method)) {{
-          const headers = new Headers(options.headers || (request ? request.headers : undefined));
-          headers.set('X-CSRF-Token', csrfToken);
-          options.headers = headers;
-          if (request) return nativeFetch(new Request(request, options));
-        }}
-        return nativeFetch(input, options);
-      }};
-    }})();
-    </script>
-    """
-
-
-def verify_csrf_request(handler, user):
-    expected = csrf_token_for_user(user)
-    submitted = (handler.headers.get("X-CSRF-Token") or "").strip()
-    if not submitted:
-        content_type = handler.headers.get("Content-Type", "")
-        if "multipart/form-data" in content_type:
-            form, _files = parse_multipart_post_data(handler)
-        elif "application/json" in content_type:
-            form = {}
-        else:
-            form = parse_post_data(handler)
-        submitted = str(form.get("csrf_token", [""])[0]).strip()
-    return bool(submitted and hmac.compare_digest(submitted, expected))
-
-
-def verify_same_origin_request(handler):
-    supplied = (handler.headers.get('Origin') or '').strip()
-    if not supplied:
-        referer = (handler.headers.get('Referer') or '').strip()
-        if referer:
-            parsed_referer = urlparse(referer)
-            supplied = f'{parsed_referer.scheme}://{parsed_referer.netloc}'
-    if not supplied:
-        return False
-    parsed_supplied = urlparse(supplied)
-    supplied_origin = f'{parsed_supplied.scheme}://{parsed_supplied.netloc}'.rstrip('/')
-    expected_origins = {request_base_url(handler).rstrip('/').lower()}
-    host = (handler.headers.get('X-Forwarded-Host') or handler.headers.get('Host') or '').split(',', 1)[0].strip()
-    proto = (handler.headers.get('X-Forwarded-Proto') or parsed_supplied.scheme or 'http').split(',', 1)[0].strip()
-    if host:
-        expected_origins.add(f'{proto}://{host}'.rstrip('/').lower())
-    return bool(supplied_origin and any(hmac.compare_digest(supplied_origin.lower(), expected) for expected in expected_origins if expected))
-
-
 def password_fingerprint(password):
     return hmac.new(APP_SECRET, password.encode("utf-8"), hashlib.sha256).hexdigest()
 
@@ -701,8 +459,6 @@ def init_db():
                 slug TEXT NOT NULL UNIQUE,
                 status TEXT NOT NULL DEFAULT 'active',
                 owner_user_id INTEGER,
-                logo_path TEXT NOT NULL DEFAULT '',
-                auto_checkout_time TEXT NOT NULL DEFAULT '23:30:00',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(owner_user_id) REFERENCES web_users(id) ON DELETE SET NULL
@@ -740,12 +496,6 @@ def init_db():
             """
         )
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_attendance_person_timestamp_id ON attendance(person_id, timestamp, id)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_attendance_role_timestamp_id ON attendance(role, timestamp, id)"
-        )
-        conn.execute(
             """
             CREATE TABLE IF NOT EXISTS web_users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -760,8 +510,6 @@ def init_db():
                 next_password_change_at TEXT NOT NULL,
                 allowed_classes_json TEXT NOT NULL DEFAULT '[]',
                 is_active INTEGER NOT NULL DEFAULT 1,
-                failed_login_count INTEGER NOT NULL DEFAULT 0,
-                locked_until TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -793,12 +541,6 @@ def init_db():
                 FOREIGN KEY(actor_user_id) REFERENCES web_users(id) ON DELETE SET NULL
             )
             """
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_audit_log_object_lookup ON audit_log(object_type, object_id, created_at, id)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_audit_log_created_action ON audit_log(created_at, action)"
         )
         conn.execute(
             """
@@ -857,17 +599,6 @@ def init_db():
         )
         conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS instruction_content (
-                id INTEGER PRIMARY KEY CHECK(id = 1),
-                content_json TEXT NOT NULL DEFAULT '{}',
-                updated_by_user_id INTEGER,
-                updated_at TEXT NOT NULL DEFAULT '',
-                FOREIGN KEY(updated_by_user_id) REFERENCES web_users(id) ON DELETE SET NULL
-            )
-            """
-        )
-        conn.execute(
-            """
             CREATE TABLE IF NOT EXISTS child_calendar_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
@@ -891,34 +622,12 @@ def init_db():
                 day_text TEXT NOT NULL,
                 title TEXT NOT NULL DEFAULT '',
                 body TEXT NOT NULL,
-                template_data_json TEXT NOT NULL DEFAULT '{}',
-                parent_communication TEXT NOT NULL DEFAULT '',
-                parent_communication_updated_at TEXT NOT NULL DEFAULT '',
                 author_user_id INTEGER,
                 author_name TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(child_user_id) REFERENCES web_users(id) ON DELETE CASCADE,
                 FOREIGN KEY(author_user_id) REFERENCES web_users(id) ON DELETE SET NULL
             )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS agenda_communication_reads (
-                entry_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                communication_version TEXT NOT NULL DEFAULT '',
-                read_at TEXT NOT NULL,
-                PRIMARY KEY(entry_id, user_id),
-                FOREIGN KEY(entry_id) REFERENCES child_agenda_entries(id) ON DELETE CASCADE,
-                FOREIGN KEY(user_id) REFERENCES web_users(id) ON DELETE CASCADE
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_agenda_communication_reads_user
-            ON agenda_communication_reads(user_id, entry_id)
             """
         )
         conn.execute(
@@ -956,12 +665,10 @@ def init_db():
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS teacher_daily_closeout (
-                project_id INTEGER NOT NULL DEFAULT 1,
-                day_text TEXT NOT NULL,
+                day_text TEXT PRIMARY KEY,
                 checkout_count INTEGER NOT NULL DEFAULT 0,
                 export_path TEXT NOT NULL DEFAULT '',
-                completed_at TEXT NOT NULL,
-                PRIMARY KEY(project_id, day_text)
+                completed_at TEXT NOT NULL
             )
             """
         )
@@ -1078,14 +785,6 @@ def init_db():
             )
             """
         )
-        ensure_column(conn, "projects", "logo_path", "TEXT NOT NULL DEFAULT ''")
-        ensure_column(conn, "projects", "auto_checkout_time", "TEXT NOT NULL DEFAULT '23:30:00'")
-        ensure_column(conn, "attendance", "snapshot_path", "TEXT")
-        ensure_column(conn, "attendance", "source", "TEXT NOT NULL DEFAULT 'system'")
-        ensure_column(conn, "attendance", "operator_name", "TEXT")
-        ensure_column(conn, "child_agenda_entries", "template_data_json", "TEXT NOT NULL DEFAULT '{}'")
-        ensure_column(conn, "child_agenda_entries", "parent_communication", "TEXT NOT NULL DEFAULT ''")
-        ensure_column(conn, "child_agenda_entries", "parent_communication_updated_at", "TEXT NOT NULL DEFAULT ''")
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(web_users)").fetchall()}
         # Older SQLite files may not have these columns.
         for column_sql in [
@@ -1094,8 +793,6 @@ def init_db():
             ("is_active", "INTEGER NOT NULL DEFAULT 1"),
             ("next_password_change_at", "TEXT"),
             ("password_fingerprint", "TEXT"),
-            ('failed_login_count', 'INTEGER NOT NULL DEFAULT 0'),
-            ('locked_until', 'TEXT'),
         ]:
             name, ddl = column_sql
             if name not in columns:
@@ -1123,23 +820,6 @@ def init_db():
         if table_columns(conn, "deleted_user_archives"):
             ensure_column(conn, "deleted_user_archives", "project_id", "INTEGER NOT NULL DEFAULT 1")
         conn.execute("UPDATE web_users SET project_id = ? WHERE project_id IS NULL OR project_id <= 0", (default_project_id,))
-        if table_columns(conn, "deleted_user_archives"):
-            conn.execute(
-                """
-                UPDATE deleted_user_archives
-                SET project_id = (
-                    SELECT web_users.project_id
-                    FROM web_users
-                    WHERE web_users.id = deleted_user_archives.user_id
-                )
-                WHERE EXISTS (
-                    SELECT 1
-                    FROM web_users
-                    WHERE web_users.id = deleted_user_archives.user_id
-                      AND web_users.project_id <> deleted_user_archives.project_id
-                )
-                """
-            )
         if table_columns(conn, "persons"):
             conn.execute("UPDATE persons SET project_id = ? WHERE project_id IS NULL OR project_id <= 0", (default_project_id,))
         conn.execute("UPDATE mobile_invitations SET project_id = ? WHERE project_id IS NULL OR project_id <= 0", (default_project_id,))
@@ -1150,7 +830,6 @@ def init_db():
         if table_columns(conn, "hidden_class_names"):
             conn.execute("UPDATE hidden_class_names SET project_id = ? WHERE project_id IS NULL OR project_id <= 0", (default_project_id,))
         repair_project_scoped_name_tables(conn)
-        repair_teacher_daily_closeout_table(conn)
         if table_columns(conn, "persons") and table_columns(conn, "web_users"):
             conn.execute(
                 """
@@ -1192,10 +871,6 @@ def init_db():
         preference_columns = {row["name"] for row in conn.execute("PRAGMA table_info(user_ui_preferences)").fetchall()}
         if preference_columns and "last_class_name" not in preference_columns:
             conn.execute("ALTER TABLE user_ui_preferences ADD COLUMN last_class_name TEXT NOT NULL DEFAULT 'all'")
-        if preference_columns and "teacher_attendance_start" not in preference_columns:
-            conn.execute("ALTER TABLE user_ui_preferences ADD COLUMN teacher_attendance_start TEXT NOT NULL DEFAULT ''")
-        if preference_columns and "teacher_attendance_end" not in preference_columns:
-            conn.execute("ALTER TABLE user_ui_preferences ADD COLUMN teacher_attendance_end TEXT NOT NULL DEFAULT ''")
         profile_columns = {row["name"] for row in conn.execute("PRAGMA table_info(user_profiles)").fetchall()}
         for name, ddl in [
             ("allergies", "TEXT NOT NULL DEFAULT ''"),
@@ -1382,42 +1057,6 @@ def repair_mobile_invitations_table(conn):
         copy_columns = ", ".join(col_names)
         conn.execute(f"INSERT INTO mobile_invitations ({copy_columns}) SELECT {copy_columns} FROM mobile_invitations_old")
         conn.execute("DROP TABLE mobile_invitations_old")
-
-
-def repair_teacher_daily_closeout_table(conn):
-    columns = conn.execute("PRAGMA table_info(teacher_daily_closeout)").fetchall()
-    if not columns:
-        return
-    primary_key = [
-        row["name"]
-        for row in sorted(columns, key=lambda item: int(item["pk"] or 0))
-        if row["pk"]
-    ]
-    if "project_id" in {row["name"] for row in columns} and primary_key == ["project_id", "day_text"]:
-        return
-    conn.execute("ALTER TABLE teacher_daily_closeout RENAME TO teacher_daily_closeout_old")
-    conn.execute(
-        """
-        CREATE TABLE teacher_daily_closeout (
-            project_id INTEGER NOT NULL DEFAULT 1,
-            day_text TEXT NOT NULL,
-            checkout_count INTEGER NOT NULL DEFAULT 0,
-            export_path TEXT NOT NULL DEFAULT '',
-            completed_at TEXT NOT NULL,
-            PRIMARY KEY(project_id, day_text)
-        )
-        """
-    )
-    conn.execute(
-        """
-        INSERT OR REPLACE INTO teacher_daily_closeout(
-            project_id, day_text, checkout_count, export_path, completed_at
-        )
-        SELECT 1, day_text, checkout_count, export_path, completed_at
-        FROM teacher_daily_closeout_old
-        """
-    )
-    conn.execute("DROP TABLE teacher_daily_closeout_old")
 
 
 def repair_project_scoped_name_tables(conn):
@@ -1612,23 +1251,16 @@ def update_user_password(conn, user_id, new_password):
 
 def archive_deleted_user(conn, deleted_user, deleted_by_user):
     snapshot = {key: deleted_user[key] for key in deleted_user.keys()}
-    if deleted_user["person_id"]:
-        linked_person = conn.execute(
-            "SELECT * FROM persons WHERE id = ? AND project_id = ?",
-            (int(deleted_user["person_id"]), int(deleted_user["project_id"] or 1)),
-        ).fetchone()
-        if linked_person:
-            snapshot["linked_person"] = {key: linked_person[key] for key in linked_person.keys()}
     now = now_text()
     conn.execute("DELETE FROM deleted_user_archives WHERE user_id = ?", (deleted_user["id"],))
     conn.execute(
         """
         INSERT INTO deleted_user_archives(
-            user_id, username, display_name, role, person_id, allowed_classes_json, project_id,
+            user_id, username, display_name, role, person_id, allowed_classes_json,
             snapshot_json, deleted_by_user_id, deleted_by_username, deleted_by_display_name,
             deleted_by_role, deleted_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             deleted_user["id"],
@@ -1637,7 +1269,6 @@ def archive_deleted_user(conn, deleted_user, deleted_by_user):
             deleted_user["role"],
             deleted_user["person_id"],
             deleted_user["allowed_classes_json"],
-            deleted_user["project_id"],
             json.dumps(snapshot, ensure_ascii=False),
             deleted_by_user["id"] if deleted_by_user else None,
             deleted_by_user["username"] if deleted_by_user else None,
@@ -1736,14 +1367,6 @@ def audit(conn, actor_user_id, action, object_type, object_id=None, details=None
     )
 
 
-def is_mobile_request(handler):
-    mobile_hint = str(handler.headers.get("Sec-CH-UA-Mobile", "") or "").strip()
-    if mobile_hint == "?1":
-        return True
-    user_agent = str(handler.headers.get("User-Agent", "") or "").lower()
-    return any(token in user_agent for token in ("android", "iphone", "ipad", "ipod", "mobile"))
-
-
 def request_ip_address(handler):
     forwarded = handler.headers.get("X-Forwarded-For", "").split(",", 1)[0].strip()
     if forwarded:
@@ -1800,68 +1423,15 @@ def audit_request(handler, conn, actor_user_id, action, object_type, object_id=N
     )
 
 
-def login_user(conn, username, password, request_handler=None, track_failure=True):
+def login_user(conn, username, password):
     user = conn.execute(
         "SELECT * FROM web_users WHERE lower(username) = lower(?) AND is_active = 1",
         (username.strip(),),
     ).fetchone()
     if not user:
         return None
-    current = local_now()
-    locked_until = (user["locked_until"] or "").strip()
-    if locked_until:
-        try:
-            lock_expiry = datetime.strptime(locked_until, "%Y-%m-%d %H:%M:%S")
-        except ValueError:
-            lock_expiry = current
-        if lock_expiry > current:
-            if track_failure and request_handler is not None:
-                audit_request(
-                    request_handler,
-                    conn,
-                    user["id"],
-                    "login_blocked",
-                    "user",
-                    object_id=user["id"],
-                    details={"username": user["username"], "locked_until": locked_until},
-                )
-            return None
-        conn.execute(
-            "UPDATE web_users SET failed_login_count = 0, locked_until = NULL WHERE id = ?",
-            (user["id"],),
-        )
-        user = conn.execute("SELECT * FROM web_users WHERE id = ?", (user["id"],)).fetchone()
     if not verify_password(password, user["password_hash"]):
-        if track_failure:
-            failed_count = int(user["failed_login_count"] or 0) + 1
-            new_locked_until = None
-            if failed_count >= LOGIN_MAX_FAILED_ATTEMPTS:
-                new_locked_until = (current + timedelta(minutes=LOGIN_LOCK_MINUTES)).strftime("%Y-%m-%d %H:%M:%S")
-            conn.execute(
-                "UPDATE web_users SET failed_login_count = ?, locked_until = ? WHERE id = ?",
-                (failed_count, new_locked_until, user["id"]),
-            )
-            if request_handler is not None:
-                audit_request(
-                    request_handler,
-                    conn,
-                    user["id"],
-                    "login_failed_locked" if new_locked_until else "login_failed",
-                    "user",
-                    object_id=user["id"],
-                    details={
-                        "username": user["username"],
-                        "failed_login_count": failed_count,
-                        "locked_until": new_locked_until,
-                    },
-                )
         return None
-    if int(user["failed_login_count"] or 0) or user["locked_until"]:
-        conn.execute(
-            "UPDATE web_users SET failed_login_count = 0, locked_until = NULL WHERE id = ?",
-            (user["id"],),
-        )
-        user = conn.execute("SELECT * FROM web_users WHERE id = ?", (user["id"],)).fetchone()
     return user
 
 
@@ -1968,7 +1538,6 @@ def get_children(conn, user, class_name=None):
     where = [
         "role = 'children'",
         "project_id = ?",
-        "NOT EXISTS (SELECT 1 FROM deleted_user_archives WHERE deleted_user_archives.person_id = persons.id AND deleted_user_archives.project_id = persons.project_id)",
     ]
     if user["role"] == "children":
         if not user["person_id"]:
@@ -2053,58 +1622,13 @@ def get_last_selected_class(conn, user_id, fallback="all"):
 def set_last_selected_class(conn, user_id, class_name):
     class_name = (class_name or "").strip() or "all"
     now = now_text()
-    try:
-        current = conn.execute(
-            "SELECT last_class_name FROM user_ui_preferences WHERE user_id = ?",
-            (user_id,),
-        ).fetchone()
-        if current and (current["last_class_name"] or "").strip() == class_name:
-            return
-        conn.execute(
-            """
-            INSERT INTO user_ui_preferences(user_id, last_class_name, updated_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET last_class_name = excluded.last_class_name, updated_at = excluded.updated_at
-            """,
-            (user_id, class_name, now),
-        )
-    except sqlite3.OperationalError as exc:
-        if "locked" not in str(exc).lower():
-            raise
-        conn.rollback()
-
-
-def get_teacher_attendance_range(conn, user_id, fallback_start, fallback_end):
-    try:
-        row = conn.execute(
-            "SELECT teacher_attendance_start, teacher_attendance_end FROM user_ui_preferences WHERE user_id = ?",
-            (user_id,),
-        ).fetchone()
-    except sqlite3.OperationalError:
-        return fallback_start, fallback_end
-    if not row:
-        return fallback_start, fallback_end
-    start_text = (row["teacher_attendance_start"] or "").strip()
-    end_text = (row["teacher_attendance_end"] or "").strip()
-    try:
-        datetime.strptime(start_text, "%Y-%m-%d")
-        datetime.strptime(end_text, "%Y-%m-%d")
-    except ValueError:
-        return fallback_start, fallback_end
-    return start_text, end_text
-
-
-def set_teacher_attendance_range(conn, user_id, start_text, end_text):
     conn.execute(
         """
-        INSERT INTO user_ui_preferences(user_id, teacher_attendance_start, teacher_attendance_end, updated_at)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(user_id) DO UPDATE SET
-            teacher_attendance_start = excluded.teacher_attendance_start,
-            teacher_attendance_end = excluded.teacher_attendance_end,
-            updated_at = excluded.updated_at
+        INSERT INTO user_ui_preferences(user_id, last_class_name, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET last_class_name = excluded.last_class_name, updated_at = excluded.updated_at
         """,
-        (user_id, start_text, end_text, now_text()),
+        (user_id, class_name, now),
     )
 
 
@@ -2281,76 +1805,82 @@ def attendance_records_for_child(conn, child_id, day_text=None):
     return attendance_records_for_people(conn, [child_id], day_text=day_text)
 
 
-def attendance_export_source_rows(conn, date_text=None, project_id=None, class_name=None):
-    where = []
+def attendance_export_source_rows(conn, date_text=None):
+    date_filter = ""
     params = []
     if date_text:
-        where.append("attendance.timestamp LIKE ?")
+        date_filter = "WHERE attendance.timestamp LIKE ?"
         params.append(f"{date_text}%")
-    if project_id is not None:
-        where.append("persons.project_id = ?")
-        params.append(int(project_id))
-    if class_name and class_name != "all":
-        where.append("persons.class_name = ?")
-        params.append(class_name)
-    where_sql = "WHERE " + " AND ".join(where) if where else ""
     return conn.execute(
         f"""
         SELECT attendance.person_id, attendance.name, attendance.role,
                COALESCE(persons.class_name, ''), attendance.timestamp,
                attendance.event_type, COALESCE(attendance.snapshot_path, ''),
-                CASE
-                  WHEN TRIM(COALESCE(attendance.operator_name, '')) <> ''
-                  THEN COALESCE(NULLIF(attendance.source, ''), 'system')
-                  WHEN COALESCE((
-                    SELECT audit_log.details_json
-                    FROM audit_log
-                    WHERE audit_log.object_type = 'attendance'
-                      AND (audit_log.object_id = attendance.person_id OR audit_log.object_id = attendance.id)
-                      AND (
-                        audit_log.action LIKE '%' || attendance.event_type
-                        OR audit_log.details_json LIKE '%"event_type": "' || attendance.event_type || '"%'
-                      )
-                      AND (
-                        audit_log.created_at <= attendance.timestamp
-                        OR audit_log.details_json LIKE '%' || attendance.timestamp || '%'
-                      )
-                    ORDER BY audit_log.created_at DESC, audit_log.id DESC
-                    LIMIT 1
-                  ), '') LIKE '%"source": "desktop"%'
-                  THEN 'desktop'
-                  ELSE 'system'
-                END AS source,
-                CASE
-                  WHEN TRIM(COALESCE(attendance.operator_name, '')) <> ''
-                  THEN attendance.operator_name
-                  ELSE COALESCE((
-                    SELECT
-                      CASE
-                        WHEN audit_log.details_json LIKE '%"source": "desktop"%'
-                        THEN attendance.name
-                        ELSE COALESCE(NULLIF(web_users.display_name, ''), NULLIF(web_users.username, ''), 'System')
-                      END
-                    FROM audit_log
-                    LEFT JOIN web_users ON web_users.id = audit_log.actor_user_id
-                    WHERE audit_log.object_type = 'attendance'
-                      AND (audit_log.object_id = attendance.person_id OR audit_log.object_id = attendance.id)
-                      AND (
-                        audit_log.action LIKE '%' || attendance.event_type
-                        OR audit_log.details_json LIKE '%"event_type": "' || attendance.event_type || '"%'
-                      )
-                      AND (
-                        audit_log.created_at <= attendance.timestamp
-                        OR audit_log.details_json LIKE '%' || attendance.timestamp || '%'
-                      )
-                    ORDER BY audit_log.created_at DESC, audit_log.id DESC
-                    LIMIT 1
-                  ), 'System')
-                END AS operator_name,
+               CASE
+                 WHEN COALESCE((
+                   SELECT audit_log.details_json
+                   FROM audit_log
+                   WHERE audit_log.object_type = 'attendance'
+                     AND (audit_log.object_id = attendance.person_id OR audit_log.object_id = attendance.id)
+                     AND (
+                       audit_log.action LIKE '%' || attendance.event_type
+                       OR audit_log.details_json LIKE '%"event_type": "' || attendance.event_type || '"%'
+                     )
+                     AND (
+                       audit_log.created_at <= attendance.timestamp
+                       OR audit_log.details_json LIKE '%' || attendance.timestamp || '%'
+                     )
+                   ORDER BY audit_log.created_at DESC, audit_log.id DESC
+                   LIMIT 1
+                 ), '') LIKE '%"source": "desktop"%'
+                 THEN 'desktop'
+                 ELSE 'system'
+               END AS source,
+               COALESCE((
+                 SELECT
+                   CASE
+                     WHEN audit_log.details_json LIKE '%"source": "desktop"%'
+                     THEN attendance.name
+                     ELSE COALESCE(NULLIF(web_users.display_name, ''), NULLIF(web_users.username, ''), 'System')
+                   END
+                 FROM audit_log
+                 LEFT JOIN web_users ON web_users.id = audit_log.actor_user_id
+                 WHERE audit_log.object_type = 'attendance'
+                   AND (audit_log.object_id = attendance.person_id OR audit_log.object_id = attendance.id)
+                   AND (
+                     audit_log.action LIKE '%' || attendance.event_type
+                     OR audit_log.details_json LIKE '%"event_type": "' || attendance.event_type || '"%'
+                   )
+                   AND (
+                     audit_log.created_at <= attendance.timestamp
+                     OR audit_log.details_json LIKE '%' || attendance.timestamp || '%'
+                   )
+                 ORDER BY audit_log.created_at DESC, audit_log.id DESC
+                 LIMIT 1
+               ), CASE
+                 WHEN COALESCE((
+                   SELECT audit_log.details_json
+                   FROM audit_log
+                   WHERE audit_log.object_type = 'attendance'
+                     AND (audit_log.object_id = attendance.person_id OR audit_log.object_id = attendance.id)
+                     AND (
+                       audit_log.action LIKE '%' || attendance.event_type
+                       OR audit_log.details_json LIKE '%"event_type": "' || attendance.event_type || '"%'
+                     )
+                     AND (
+                       audit_log.created_at <= attendance.timestamp
+                       OR audit_log.details_json LIKE '%' || attendance.timestamp || '%'
+                     )
+                   ORDER BY audit_log.created_at DESC, audit_log.id DESC
+                   LIMIT 1
+                 ), '') LIKE '%"source": "desktop"%'
+                 THEN attendance.name
+                 ELSE 'System'
+               END) AS operator_name,
                attendance.id
         FROM attendance
         LEFT JOIN persons ON persons.id = attendance.person_id
-        {where_sql}
+        {date_filter}
         ORDER BY attendance.timestamp DESC, attendance.id DESC
         """,
         params,
@@ -3228,32 +2758,29 @@ def load_children_for_acceo_report(project_id=1):
         ).fetchall()
 
 
-def load_child_attendance_statuses(start_date, end_date, project_id=1):
+def load_child_checkin_dates(start_date, end_date, project_id=1):
     start_text = start_date.strftime("%Y-%m-%d")
     end_text = end_date.strftime("%Y-%m-%d")
     with connect_db() as conn:
         rows = conn.execute(
             """
-            SELECT attendance.person_id, substr(attendance.timestamp, 1, 10) AS day_text,
-                   attendance.event_type
+            SELECT attendance.person_id, substr(attendance.timestamp, 1, 10)
             FROM attendance
             JOIN persons ON persons.id = attendance.person_id
             WHERE attendance.role = 'children'
+              AND attendance.event_type = 'checkin'
               AND persons.project_id = ?
               AND substr(attendance.timestamp, 1, 10) BETWEEN ? AND ?
-            ORDER BY attendance.timestamp ASC, attendance.id ASC
+            GROUP BY attendance.person_id, substr(attendance.timestamp, 1, 10)
             """,
             (project_id, start_text, end_text),
         ).fetchall()
 
-    statuses = {}
-    for person_id, day_text, event_type in rows:
-        person_days = statuses.setdefault(person_id, {})
-        if event_type == "checkin":
-            person_days[day_text] = "P"
-        elif day_text not in person_days:
-            person_days[day_text] = "A"
-    return statuses
+    checkins = {}
+    for person_id, date_text in rows:
+        checkins.setdefault(person_id, set()).add(date_text)
+    return checkins
+
 
 def draw_text(page, x, y, text, size=9, bold=False):
     page.insert_text((x, y), str(text), fontsize=size, fontname="helv", color=(0, 0, 0))
@@ -3305,38 +2832,7 @@ def load_acceo_template_closed_offsets():
     return closed_offsets or {(2, 2), (3, 2)}
 
 
-def acceo_report_project_name(project_id):
-    with connect_db() as conn:
-        row = conn.execute("SELECT name FROM projects WHERE id = ?", (project_id,)).fetchone()
-    return (row["name"] if row and row["name"] else "Projet principal").strip()
-
-
-def acceo_template_path(detailed=True):
-    pattern = "Fiche assiduit*detaillee 4 week.pdf" if detailed else "Fiche assiduite 4 week.pdf"
-    matches = sorted(FORM_DIR.glob(pattern))
-    if not matches:
-        raise RuntimeError(f"4-week fiche PDF template is missing: {pattern}")
-    return matches[0]
-
-
-def redact_pdf_template_page(page, rectangles):
-    import fitz
-
-    for coords in rectangles:
-        page.add_redact_annot(fitz.Rect(*coords), fill=(1, 1, 1))
-    page.apply_redactions(images=0, graphics=0)
-
-
-def attendance_code_for_report(person_id, current_date, attendance_statuses, closed_dates):
-    if current_date.weekday() >= 5:
-        return ""
-    date_text = current_date.strftime("%Y-%m-%d")
-    if date_text in closed_dates:
-        return "F"
-    return attendance_statuses.get(person_id, {}).get(date_text, "A")
-
-
-def generate_acceo_detail_attendance_pdf(start_date, project_id=1, person_id=None):
+def generate_acceo_detail_attendance_pdf(start_date, project_id=1):
     try:
         import fitz
     except ImportError as exc:
@@ -3346,62 +2842,106 @@ def generate_acceo_detail_attendance_pdf(start_date, project_id=1, person_id=Non
     week_starts = [start_date + timedelta(days=7 * index) for index in range(4)]
     end_date = start_date + timedelta(days=27)
     children = load_children_for_acceo_report(project_id)
-    if person_id is not None:
-        children = [child for child in children if int(child["id"]) == int(person_id)]
-    attendance_statuses = load_child_attendance_statuses(start_date, end_date, project_id)
+    checkins = load_child_checkin_dates(start_date, end_date, project_id)
+    closed_offsets = load_acceo_template_closed_offsets()
     closed_dates = set(load_closed_dates())
-    project_name = acceo_report_project_name(project_id)
-    now = local_now()
-    template = fitz.open(str(acceo_template_path(detailed=True)))
+
     doc = fitz.open()
+    day_names = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
     day_x = [185, 242, 299, 356, 413, 470, 527]
+    day_width = 45
     row_y = [298, 317, 335, 354]
+    now = datetime.now()
+
+    for person_id, child_name, class_name in children:
+        page = doc.new_page(width=612, height=792)
+        page.draw_rect(fitz.Rect(51, 69, 574, 85), color=(0.5, 0.5, 0.5), fill=(0.5, 0.5, 0.5))
+        draw_text(page, 428, 82, "Garderie L'Univers de Cassiopée", size=9)
+        draw_text(page, 51, 64, f"Fiche d'assiduité détaillée du {acceo_date_text(start_date)}   au {acceo_date_text(end_date)}", size=12)
+
+        draw_text(page, 51, 103, "Nom de l'installation :", size=9)
+        draw_text(page, 178, 103, "Installation 1", size=9)
+        draw_text(page, 51, 117, "Nom de l'enfant :", size=9)
+        draw_text(page, 178, 117, child_name, size=9)
+        draw_text(page, 51, 130, "Nom du parent :", size=9)
+        draw_text(page, 51, 143, "Nom du groupe :", size=9)
+        draw_text(page, 178, 143, class_name or " ", size=9)
+        draw_text(page, 51, 157, "Date de fin de fréquentation :", size=9)
+
+        page.draw_rect(fitz.Rect(51.5, 169.5, 572, 258), color=(0, 0, 0), width=0.5)
+        draw_text(page, 57, 184, "LÉGENDE", size=9)
+        draw_text(page, 57, 199, "Codes de présences", size=9)
+        draw_text(page, 318, 199, "Codes d'absence", size=9)
+        legend_left = [
+            ("P :", "Présence 1 jour"),
+            ("R :", "Enfant remplaçant 1 jour"),
+            ("E : Pédagogique 1 jour", ""),
+            ("P½ :", "Présence ½ jour"),
+            ("R½ :", "Enfant remplaçant ½ jour"),
+            ("E½ :", "Pédagogique ½ jour"),
+        ]
+        legend_right = [
+            ("A :", "Absence 1 jour"),
+            ("M :", "Maladie 1 jour"),
+            ("V :", "Vacances 1 jour"),
+            ("F :", "Fermé 1 jour"),
+            ("A½ :", "Absence ½ jour"),
+            ("M½ :", "Maladie ½ jour"),
+            ("V½ :", "Vacances ½ jour"),
+        ]
+        for idx, (code, label) in enumerate(legend_left):
+            y = 215 + (idx % 3) * 18
+            x = 57 if idx < 3 else 176
+            draw_text(page, x, y, code, size=9)
+            if label:
+                draw_text(page, x + 24, y, label, size=9)
+        for idx, (code, label) in enumerate(legend_right):
+            y = 215 + (idx % 4) * 13
+            x = 318 if idx < 4 else 438
+            draw_text(page, x, y, code, size=9)
+            draw_text(page, x + 24, y, label, size=9)
+
+        page.draw_rect(fitz.Rect(51.5, 267, 572, 359), color=(0, 0, 0), width=0.5)
+        header_y = 281
+        draw_text(page, 69, header_y, "Semaine débutant le", size=9)
+        for idx, day_name in enumerate(day_names):
+            draw_centered_text(page, day_x[idx] - 8, header_y, day_width, day_name, size=9)
+
+        for week_index, week_start in enumerate(week_starts):
+            y = row_y[week_index]
+            draw_text(page, 92 if week_index else 93, y, acceo_date_text(week_start), size=9)
+            for day_index in range(7):
+                current_date = week_start + timedelta(days=day_index)
+                current_date_text = current_date.strftime("%Y-%m-%d")
+                if current_date_text in closed_dates or (week_index, day_index) in closed_offsets:
+                    code = "F"
+                elif current_date_text in checkins.get(person_id, set()):
+                    code = "P"
+                else:
+                    code = "A"
+                draw_centered_text(page, day_x[day_index] - 6, y, 18, code, size=9)
+
+        page.draw_rect(fitz.Rect(51.5, 369, 572, 425), color=(0, 0, 0), width=0.5)
+        draw_text(page, 57, 390, "Signature du service de garde :", size=9)
+        draw_text(page, 438, 390, "Date :", size=9)
+        draw_text(page, 57, 414, "J'atteste que les renseignements inscrits sur cette fiche d'assiduité correspondent à la présence réelle de cet enfant.", size=7)
+
+        page.draw_rect(fitz.Rect(51.5, 436, 572, 492), color=(0, 0, 0), width=0.5)
+        draw_text(page, 57, 456, "Signature du parent :", size=9)
+        draw_text(page, 438, 456, "Date :", size=9)
+        draw_text(page, 57, 480, "J'atteste que les renseignements inscrits sur cette fiche d'assiduité correspondent à la présence réelle de mon enfant.", size=7)
+
+        draw_text(page, 410, 767, f"Imprimé le {acceo_date_text(now.date())} à {now.strftime('%H:%M')}", size=8)
+        draw_text(page, 515, 780, "Page 1 de 1", size=8)
+        draw_text(page, 331, 790, "Ce rapport a été produit avec ACCEO Services de garde.", size=8)
 
     try:
-        for person_id, child_name, class_name in children:
-            doc.insert_pdf(template, from_page=0, to_page=0)
-            page = doc[-1]
-            redact_pdf_template_page(
-                page,
-                [
-                    (48, 45, 570, 70),
-                    (420, 68, 575, 88),
-                    (174, 91, 570, 108),
-                    (174, 105, 570, 123),
-                    (174, 118, 570, 136),
-                    (174, 132, 570, 150),
-                    (174, 145, 570, 163),
-                    (86, 286, 565, 362),
-                    (455, 753, 575, 775),
-                ],
-            )
-            draw_text(page, 51, 64, f"Fiche d'assiduité détaillée du {acceo_date_text(start_date)} au {acceo_date_text(end_date)}", size=12)
-            draw_text(page, 428, 82, project_name, size=9)
-            draw_text(page, 178, 103, project_name, size=9)
-            draw_text(page, 178, 117, f"{child_name} ({person_id})", size=9)
-            draw_text(page, 178, 143, class_name or "", size=9)
-
-            for week_index, week_start in enumerate(week_starts):
-                y = row_y[week_index]
-                draw_text(page, 92, y, acceo_date_text(week_start), size=9)
-                for day_index in range(7):
-                    code = attendance_code_for_report(
-                        person_id,
-                        week_start + timedelta(days=day_index),
-                        attendance_statuses,
-                        closed_dates,
-                    )
-                    if code:
-                        draw_centered_text(page, day_x[day_index] - 6, y, 18, code, size=9)
-
-            draw_text(page, 458, 767, f"Imprimé le {acceo_date_text(now.date())} à {now.strftime('%H:%M')}", size=8)
         return doc.tobytes()
     finally:
-        template.close()
         doc.close()
 
 
-def generate_acceo_summary_attendance_pdf(start_date, project_id=1, person_id=None):
+def generate_acceo_summary_attendance_pdf(start_date, project_id=1):
     try:
         import fitz
     except ImportError as exc:
@@ -3411,80 +2951,102 @@ def generate_acceo_summary_attendance_pdf(start_date, project_id=1, person_id=No
     week_starts = [start_date + timedelta(days=7 * index) for index in range(4)]
     end_date = start_date + timedelta(days=27)
     children = load_children_for_acceo_report(project_id)
-    if person_id is not None:
-        children = [child for child in children if int(child["id"]) == int(person_id)]
-    attendance_statuses = load_child_attendance_statuses(start_date, end_date, project_id)
+    checkins = load_child_checkin_dates(start_date, end_date, project_id)
+    closed_offsets = load_acceo_template_closed_offsets()
     closed_dates = set(load_closed_dates())
-    project_name = acceo_report_project_name(project_id)
-    now = local_now()
-    template = fitz.open(str(acceo_template_path(detailed=False)))
+    now = datetime.now()
+
     doc = fitz.open()
+    day_short = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]
     day_x = [247, 274, 302, 329, 356, 383, 410]
-    week_y = [237, 276, 315, 354]
+    week_y = [285, 330, 375, 420]
+
+    for person_id, child_name, class_name in children:
+        page = doc.new_page(width=792, height=612)
+        draw_text(page, 40, 48, "Garderie L'Univers de Cassiopée", size=9)
+        draw_text(page, 40, 72, f"Fiche d'assiduité du {acceo_date_text(start_date)}  au {acceo_date_text(end_date)}", size=13)
+
+        draw_text(page, 40, 105, "Groupe :", size=8)
+        draw_text(page, 130, 105, class_name or " ", size=8)
+        draw_text(page, 40, 120, "Dossier :", size=8)
+        draw_text(page, 130, 120, str(person_id), size=8)
+        draw_text(page, 40, 135, "Nom :", size=8)
+        draw_text(page, 130, 135, child_name, size=8)
+        draw_text(page, 40, 150, "Naissance :", size=8)
+        draw_text(page, 40, 165, "Composante :", size=8)
+        draw_text(page, 130, 165, "Garderie L'Univers de Cassiopée", size=8)
+        draw_text(page, 40, 180, "Payeur principal :", size=8)
+        draw_text(page, 40, 195, "Nom de l'établissement :", size=8)
+        draw_text(page, 130, 195, "Garderie L'Univers de Cassiopée", size=8)
+        draw_text(page, 40, 210, "Numéro d'établissement :", size=8)
+
+        draw_text(page, 430, 105, "Légende :", size=8)
+        legend = ["A : Absent", "E : Pédagogique", "F : Férié", "M : Maladie", "P : Présent", "R : Remplacement", "V : Vacances"]
+        for idx, text in enumerate(legend):
+            draw_text(page, 430 + (idx // 4) * 115, 120 + (idx % 4) * 15, text, size=8)
+
+        draw_text(page, 430, 190, "Cumulatif des journées", size=8)
+        draw_text(page, 548, 190, "Absence", size=8)
+        draw_text(page, 620, 190, "Total", size=8)
+
+        header_y = 265
+        for idx, label in enumerate(day_short):
+            draw_centered_text(page, day_x[idx] - 8, header_y, 22, label, size=8)
+        draw_text(page, 445, header_y, "Absence", size=8)
+        draw_text(page, 505, header_y, "Total", size=8)
+
+        total_present = 0
+        total_absent = 0
+        for week_index, week_start in enumerate(week_starts):
+            y = week_y[week_index]
+            week_end = week_start + timedelta(days=6)
+            week_present = 0
+            week_absent = 0
+
+            draw_text(page, 40, y, f"Du {acceo_date_text(week_start)}  au {acceo_date_text(week_end)}", size=8)
+            draw_text(page, 40, y + 13, "Heures de garde", size=7)
+            draw_text(page, 40, y + 26, "Équivalence en journée ou demi-journée", size=7)
+
+            for day_index in range(7):
+                current_date = week_start + timedelta(days=day_index)
+                current_date_text = current_date.strftime("%Y-%m-%d")
+                if current_date_text in closed_dates or (week_index, day_index) in closed_offsets:
+                    code = "F"
+                elif current_date_text in checkins.get(person_id, set()):
+                    code = "P"
+                    week_present += 1
+                else:
+                    code = "A"
+                    week_absent += 1
+                draw_centered_text(page, day_x[day_index] - 5, y, 18, code, size=9)
+
+            total_present += week_present
+            total_absent += week_absent
+            draw_text(page, 455, y, str(week_absent), size=8)
+            draw_text(page, 515, y, str(week_present), size=8)
+
+        draw_text(page, 40, 485, "Nombre de jours de garde durant les quatre (4) semaines :", size=8)
+        draw_text(page, 335, 485, str(total_present), size=8)
+        draw_text(page, 430, 485, "Total depuis le 9/1/2025   :", size=8)
+        draw_text(page, 560, 485, str(total_present), size=8)
+
+        page.draw_line((40, 525), (370, 525), color=(0, 0, 0), width=0.5)
+        page.draw_line((420, 525), (750, 525), color=(0, 0, 0), width=0.5)
+        draw_text(page, 40, 542, "Signature du parent :", size=8)
+        draw_text(page, 420, 542, "Signature du responsable :", size=8)
+        draw_text(page, 40, 565, "Date :", size=8)
+        draw_text(page, 420, 565, "Date :", size=8)
+        draw_text(page, 40, 510, "Je déclare que les renseignements mentionnés sur cette fiche d'assiduité sont exacts.", size=8)
+
+        draw_text(page, 610, 574, f"Imprimé le {acceo_date_text(now.date())} à {now.strftime('%H:%M')}", size=8)
+        draw_text(page, 710, 590, "Page 1 de 1", size=8)
+        draw_text(page, 530, 605, "Ce rapport a été produit avec ACCEO Services de garde.", size=8)
 
     try:
-        for person_id, child_name, class_name in children:
-            doc.insert_pdf(template, from_page=0, to_page=0)
-            page = doc[-1]
-            redact_pdf_template_page(
-                page,
-                [
-                    (40, 54, 620, 76),
-                    (600, 78, 790, 99),
-                    (92, 96, 255, 134),
-                    (326, 96, 790, 134),
-                    (515, 190, 790, 216),
-                    (42, 225, 525, 389),
-                    (188, 400, 535, 426),
-                    (388, 430, 750, 452),
-                    (630, 560, 790, 582),
-                ],
-            )
-            draw_text(page, 43, 72, f"Fiche d'assiduité du {acceo_date_text(start_date)} au {acceo_date_text(end_date)}", size=13)
-            draw_text(page, 608, 92, project_name, size=9)
-            draw_text(page, 100, 108, str(person_id), size=9)
-            draw_text(page, 100, 119, child_name, size=9)
-            draw_text(page, 335, 108, "", size=9)
-            draw_text(page, 335, 119, project_name, size=9)
-            draw_text(page, 335, 130, class_name or "", size=9)
-            draw_text(page, 580, 108, project_name, size=8)
-
-            total_present = 0
-            total_absent = 0
-            for week_index, week_start in enumerate(week_starts):
-                y = week_y[week_index]
-                week_end = week_start + timedelta(days=6)
-                week_present = 0
-                week_absent = 0
-                draw_text(page, 49, y, f"Du {acceo_date_text(week_start)} au {acceo_date_text(week_end)}", size=8)
-                for day_index in range(7):
-                    current_date = week_start + timedelta(days=day_index)
-                    code = attendance_code_for_report(person_id, current_date, attendance_statuses, closed_dates)
-                    if code == "P":
-                        week_present += 1
-                    elif code == "A":
-                        week_absent += 1
-                    if code:
-                        draw_centered_text(page, day_x[day_index] - 5, y, 18, code, size=9)
-                    hours = "10" if code in {"P", "F"} else ("0" if code else "")
-                    equivalent = "1.0" if code in {"P", "F"} else ("0" if code else "")
-                    if hours:
-                        draw_centered_text(page, day_x[day_index] - 6, y + 12, 20, hours, size=7)
-                    if equivalent:
-                        draw_centered_text(page, day_x[day_index] - 7, y + 25, 22, equivalent, size=7)
-                total_present += week_present
-                total_absent += week_absent
-                draw_text(page, 448, y + 25, str(week_present), size=8)
-                draw_text(page, 484, y + 25, str(week_absent), size=8)
-
-            draw_text(page, 445, 414, str(total_present), size=9)
-            draw_text(page, 484, 414, str(total_absent), size=9)
-            draw_text(page, 520, 445, str(total_present), size=9)
-            draw_text(page, 640, 574, f"Imprimé le {acceo_date_text(now.date())} à {now.strftime('%H:%M')}", size=8)
         return doc.tobytes()
     finally:
-        template.close()
         doc.close()
+
 
 def get_attendance_rows(conn, person_id, day_text):
     person = conn.execute("SELECT id FROM persons WHERE id = ?", (person_id,)).fetchone()
@@ -3515,52 +3077,11 @@ def current_child_present(conn, person_id, day_text):
     return current_child_status(conn, person_id, day_text) == "P"
 
 
-def child_attended_on_day(conn, person_id, day_text):
-    return any(row["event_type"] == "checkin" for row in get_attendance_rows(conn, person_id, day_text))
-
-
 def count_statuses(conn, children, day_text):
     counts = {"P": 0, "A": 0, "F": 0}
     for child in children:
         counts[current_child_status(conn, child["id"], day_text)] += 1
     return counts
-
-
-def child_status_map(conn, children, day_text):
-    child_ids = [int(child["id"]) for child in children if child["id"] is not None]
-    if not child_ids:
-        return {}
-    if day_text in load_closed_dates():
-        return {child_id: "F" for child_id in child_ids}
-    statuses = {child_id: "A" for child_id in child_ids}
-    placeholders = ",".join("?" for _ in child_ids)
-    rows = conn.execute(
-        f"""
-        SELECT person_id, event_type
-        FROM attendance
-        WHERE person_id IN ({placeholders}) AND timestamp LIKE ?
-        ORDER BY person_id, timestamp ASC, id ASC
-        """,
-        (*child_ids, f"{day_text}%"),
-    ).fetchall()
-    for row in rows:
-        statuses[int(row["person_id"])] = "P" if row["event_type"] == "checkin" else "A"
-    return statuses
-
-
-def count_mapped_statuses(children, statuses):
-    counts = {"P": 0, "A": 0, "F": 0}
-    for child in children:
-        counts[statuses.get(int(child["id"]), "A")] += 1
-    return counts
-
-
-TEST_GROUP_NAMES = {"test", "test group", "groupe test"}
-
-
-def is_test_group_name(value):
-    normalized = re.sub(r"[\s_-]+", " ", str(value or "").strip()).casefold()
-    return normalized in TEST_GROUP_NAMES
 
 
 def dashboard_arrival_increase_points(conn, children, day_text):
@@ -3777,15 +3298,14 @@ def dashboard_version(conn, children, day_text):
     placeholders = ",".join("?" for _ in ids)
     row = conn.execute(
         f"""
-        SELECT COALESCE(MAX(id), 0) AS max_id,
-               COUNT(*) AS row_count,
-               COALESCE(SUM(id), 0) AS id_sum
+        SELECT COALESCE(MAX(id), 0) AS max_id
         FROM attendance
         WHERE person_id IN ({placeholders}) AND timestamp LIKE ?
         """,
         (*ids, f"{day_text}%"),
     ).fetchone()
-    return int(row["max_id"] or 0) * 1_000_003 + int(row["row_count"] or 0) * 10_007 + int(row["id_sum"] or 0)
+    return int(row["max_id"] or 0)
+
 
 def teacher_attendance_version(conn, day_text):
     attendance_row = conn.execute(
@@ -3819,39 +3339,20 @@ def teacher_daily_attendance_rows(conn, day_text):
     ).fetchall()
 
 
-def write_teacher_daily_attendance_export(conn, day_text, project_id):
-    project_id = int(project_id or 1)
-    summary = teacher_attendance_day_summary(conn, day_text, project_id)
-
-    def display_time(value):
-        value = str(value or "")
-        return value[11:16] if len(value) >= 16 else value
-
+def write_teacher_daily_attendance_export(conn, day_text):
+    rows = teacher_daily_attendance_rows(conn, day_text)
     export_rows = [
-        [
-            teacher["name"],
-            "Present" if teacher["status"] == "P" else "Absent",
-            display_time(teacher["first_checkin"]),
-            display_time(teacher["last_checkout"]),
-            teacher["schedule_in"],
-            teacher["schedule_out"],
-            teacher["work_hours"],
-        ]
-        for teacher in summary["teachers"]
+        [row["name"], EVENT_LABELS.get(row["event_type"], row["event_type"]), row["timestamp"]]
+        for row in rows
     ]
     stamp = day_text.replace("-", "")
-    project_export_dir = DAILY_EXPORT_DIR / f"project_{project_id}"
-    project_export_dir.mkdir(parents=True, exist_ok=True)
-    path = project_export_dir / f"educatrices_{stamp}.xlsx"
+    path = DAILY_EXPORT_DIR / f"teacher_attendance_{stamp}.xlsx"
     write_xlsx_workbook(
         path,
         [
             {
-                "name": "Educatrices",
-                "headers": [
-                    "Teacher", "Status", "First in", "Last out",
-                    "SCHEDULE IN", "SCHEDULE OUT", "WORK HOURS",
-                ],
+                "name": "Teacher Attendance",
+                "headers": ["Teacher", "Event", "Time"],
                 "rows": export_rows,
             }
         ],
@@ -3859,92 +3360,56 @@ def write_teacher_daily_attendance_export(conn, day_text, project_id):
     return path
 
 
-def attendance_days_needing_closeout(before_day_text, project_id=None):
-    with connect_db() as conn:
-        rows = conn.execute(
-            """
-            SELECT DISTINCT substr(attendance.timestamp, 1, 10) AS day_text
-            FROM attendance
-            JOIN persons ON persons.id = attendance.person_id
-            WHERE substr(attendance.timestamp, 1, 10) < ?
-              AND (? IS NULL OR persons.project_id = ?)
-              AND persons.role IN ('teachers', 'children')
-              AND persons.id NOT IN (
-                  SELECT person_id
-                  FROM deleted_user_archives
-                  WHERE person_id IS NOT NULL
-              )
-              AND attendance.event_type = 'checkin'
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM attendance AS later
-                  WHERE later.person_id = attendance.person_id
-                    AND substr(later.timestamp, 1, 10) = substr(attendance.timestamp, 1, 10)
-                    AND (
-                        later.timestamp > attendance.timestamp
-                        OR (later.timestamp = attendance.timestamp AND later.id > attendance.id)
-                    )
-              )
-            ORDER BY day_text
-            """,
-            (before_day_text, project_id, project_id),
-        ).fetchall()
-    return [row["day_text"] for row in rows if row["day_text"]]
-
-
-def closeout_teacher_attendance_day(day_text=None, project_id=None, checkout_time=None):
+def closeout_teacher_attendance_day(day_text=None):
     day_text = day_text or today_text()
-    checkout_time = checkout_time or TEACHER_DAILY_CLOSEOUT_TIME
-    checkout_timestamp = f"{day_text} {checkout_time}"
-    project_id = int(project_id or 1)
-    project_clause = " AND project_id = ?"
-    project_params = [project_id]
+    checkout_timestamp = f"{day_text} {TEACHER_DAILY_CLOSEOUT_TIME}:00"
     with connect_db() as conn:
-        people = conn.execute(
-            f"""
-            SELECT id, name, role, project_id
+        existing = conn.execute("SELECT 1 FROM teacher_daily_closeout WHERE day_text = ?", (day_text,)).fetchone()
+        if existing:
+            return False, 0, ""
+        teachers = conn.execute(
+            """
+            SELECT id, name
             FROM persons
-            WHERE role IN ('teachers', 'children')
+            WHERE role = 'teachers'
               AND id NOT IN (SELECT person_id FROM deleted_user_archives WHERE person_id IS NOT NULL)
-              {project_clause}
-            ORDER BY project_id, name COLLATE NOCASE
-            """,
-            project_params,
+            ORDER BY name COLLATE NOCASE
+            """
         ).fetchall()
         checkout_count = 0
-        for person in people:
+        for teacher in teachers:
             latest = conn.execute(
                 """
                 SELECT event_type
                 FROM attendance
-                WHERE person_id = ?
+                WHERE lower(name) = lower(?)
+                  AND role = 'teachers'
                   AND timestamp LIKE ?
                 ORDER BY timestamp DESC, id DESC
                 LIMIT 1
                 """,
-                (person["id"], f"{day_text}%"),
+                (teacher["name"], f"{day_text}%"),
             ).fetchone()
             if not latest or latest["event_type"] != "checkin":
                 continue
             conn.execute(
                 """
-                INSERT INTO attendance(person_id, name, role, event_type, timestamp, snapshot_path, source, operator_name)
-                VALUES (?, ?, ?, 'checkout', ?, NULL, 'daily_closeout', 'System')
+                INSERT INTO attendance(person_id, name, role, event_type, timestamp, snapshot_path)
+                VALUES (?, ?, 'teachers', 'checkout', ?, NULL)
                 """,
-                (person["id"], person["name"], person["role"], checkout_timestamp),
+                (teacher["id"], teacher["name"], checkout_timestamp),
             )
             attendance_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
             audit(
                 conn,
                 None,
-                "daily_auto_checkout",
+                "teacher_daily_auto_checkout",
                 "attendance",
-                object_id=person["id"],
+                object_id=teacher["id"],
                 details={
                     "attendance_id": attendance_id,
-                    "person_name": person["name"],
-                    "role": person["role"],
-                    "project_id": person["project_id"],
+                    "person_name": teacher["name"],
+                    "role": "teachers",
                     "event_type": "checkout",
                     "timestamp": checkout_timestamp,
                     "source": "daily_closeout",
@@ -3952,79 +3417,37 @@ def closeout_teacher_attendance_day(day_text=None, project_id=None, checkout_tim
                 },
             )
             checkout_count += 1
-        # Release the SQLite writer lock before creating the XLSX export. File
-        # generation can be comparatively slow and must not block logins or
-        # normal web requests from writing to the database.
-        conn.commit()
-        export_path = write_teacher_daily_attendance_export(conn, day_text, project_id)
+        export_path = write_teacher_daily_attendance_export(conn, day_text)
         conn.execute(
             """
-            INSERT INTO teacher_daily_closeout(project_id, day_text, checkout_count, export_path, completed_at)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(project_id, day_text) DO UPDATE SET
-                checkout_count = teacher_daily_closeout.checkout_count + excluded.checkout_count,
-                export_path = excluded.export_path,
-                completed_at = excluded.completed_at
+            INSERT INTO teacher_daily_closeout(day_text, checkout_count, export_path, completed_at)
+            VALUES (?, ?, ?, ?)
             """,
-            (int(project_id or 1), day_text, checkout_count, str(export_path), now_text()),
+            (day_text, checkout_count, str(export_path), now_text()),
         )
         audit(
             conn,
             None,
-            "daily_closeout",
+            "teacher_daily_closeout",
             "attendance",
-            object_id=f"{int(project_id or 1)}:{day_text}",
-            details={
-                "project_id": int(project_id or 1),
-                "day": day_text,
-                "checkout_count": checkout_count,
-                "export_path": str(export_path),
-            },
+            object_id=day_text,
+            details={"day": day_text, "checkout_count": checkout_count, "export_path": str(export_path)},
         )
         conn.commit()
-    return checkout_count > 0, checkout_count, str(export_path)
+    return True, checkout_count, str(export_path)
+
 
 def teacher_daily_closeout_worker(stop_event):
-    processed_schedule_keys = set()
     while not stop_event.is_set():
         current = local_now()
-        current_day = current.strftime("%Y-%m-%d")
-        current_time = current.strftime("%H:%M:%S")
-        try:
-            with connect_db() as conn:
-                scheduled_projects = conn.execute(
-                    "SELECT id, auto_checkout_time FROM projects WHERE status IN ('active', 'pending_owner') ORDER BY id"
-                ).fetchall()
-        except sqlite3.Error as exc:
-            scheduled_projects = []
-            print(f"Auto checkout project scan failed: {exc}", file=sys.stderr, flush=True)
-        for project in scheduled_projects:
-            project_id = project["id"]
-            checkout_time = (project["auto_checkout_time"] or TEACHER_DAILY_CLOSEOUT_TIME).strip()
-            if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d", checkout_time):
-                checkout_time = TEACHER_DAILY_CLOSEOUT_TIME
-            schedule_key = (int(project_id), current_day, checkout_time)
-            if current_time < checkout_time or schedule_key in processed_schedule_keys:
-                continue
-            # Mark this project/day before scanning attendance so the worker never
-            # repeats the expensive presence check every minute after closeout.
-            processed_schedule_keys.add(schedule_key)
+        if current.strftime("%H:%M") >= TEACHER_DAILY_CLOSEOUT_TIME:
             try:
-                missed_days = attendance_days_needing_closeout(current_day, project_id=project_id)
+                closeout_teacher_attendance_day(current.strftime("%Y-%m-%d"))
             except Exception as exc:
-                missed_days = []
-                print(f"Attendance closeout scan failed for project {project_id}: {exc}", file=sys.stderr, flush=True)
-            for missed_day in missed_days:
-                try:
-                    closeout_teacher_attendance_day(missed_day, project_id=project_id, checkout_time=checkout_time)
-                except Exception as exc:
-                    print(f"Attendance closeout failed for project {project_id} on {missed_day}: {exc}", file=sys.stderr, flush=True)
-            try:
-                closeout_teacher_attendance_day(current_day, project_id=project_id, checkout_time=checkout_time)
-            except Exception as exc:
-                print(f"Attendance closeout failed for project {project_id} on {current_day}: {exc}", file=sys.stderr, flush=True)
-        processed_schedule_keys = {key for key in processed_schedule_keys if key[1] == current_day}
+                print(f"Teacher daily closeout failed: {exc}", file=sys.stderr, flush=True)
         stop_event.wait(60)
+
+
 def resolve_existing_child_photo(photo_path):
     if not photo_path:
         return None
@@ -4417,24 +3840,10 @@ def unread_message_count(user):
 
 
 def css():
-    background_overlay = 1.0 - (app_background_opacity_percent() / 100.0)
-    text_window_opacity = text_window_opacity_percent() / 100.0
-    text_surface_opacity = min(1.0, text_window_opacity * (62.0 / 72.0))
-    text_card_opacity = min(1.0, text_window_opacity * (68.0 / 72.0))
-    text_input_opacity = min(1.0, text_window_opacity * (82.0 / 72.0))
-    text_cell_opacity = min(1.0, text_window_opacity * (16.0 / 72.0))
-    text_login_opacity = min(1.0, text_window_opacity * (76.0 / 72.0))
     return """
     <style>
     :root {
       --bg: #eef4f7;
-      --app-background-overlay: __APP_BACKGROUND_OVERLAY__;
-      --text-window-opacity: __TEXT_WINDOW_OPACITY__;
-      --text-surface-opacity: __TEXT_SURFACE_OPACITY__;
-      --text-card-opacity: __TEXT_CARD_OPACITY__;
-      --text-input-opacity: __TEXT_INPUT_OPACITY__;
-      --text-cell-opacity: __TEXT_CELL_OPACITY__;
-      --text-login-opacity: __TEXT_LOGIN_OPACITY__;
       --panel: #ffffff;
       --panel-soft: #f7fafb;
       --text: #102033;
@@ -4459,13 +3868,8 @@ def css():
     a { color: #1e6aa8; text-decoration: none; }
     a:hover { text-decoration: underline; }
     .topbar { position: sticky; top: 0; z-index: 1000; background: linear-gradient(135deg, #0f3f66, #146a7c 58%, #1b8a68); color: var(--navText); padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; box-shadow: 0 10px 28px rgba(15, 63, 102, 0.24); }
-    .brand { min-width:0; display:flex; align-items:center; gap:10px; font-size:clamp(17px, 2.2vw, 23px); font-weight:900; letter-spacing:0; white-space:nowrap; color:#ffffff; text-shadow:0 1px 2px rgba(10,32,52,0.22); }
-    .brand-logo { width:46px; height:46px; flex:0 0 46px; border-radius:50%; object-fit:cover; background:#fff; border:2px solid rgba(255,255,255,.88); box-shadow:0 3px 10px rgba(10,32,52,.25); }
-    .brand-name { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+    .brand { font-size: 23px; font-weight: 900; letter-spacing: 0; white-space: nowrap; color: #ffffff; text-shadow: 0 1px 2px rgba(10,32,52,0.22); }
     @keyframes brand-rainbow { from { background-position: 0% 50%; } to { background-position: 240% 50%; } }
-    .app-language-switch { display:inline-flex; gap:3px; padding:3px; border:1px solid rgba(255,255,255,.30); border-radius:999px; background:rgba(255,255,255,.14); }
-    .app-language-switch button { min-width:34px; min-height:30px; padding:4px 7px; border:0; border-radius:999px; background:transparent; color:#fff; font:inherit; font-size:11px; font-weight:900; cursor:pointer; }
-    .app-language-switch button[aria-pressed="true"] { background:#fff; color:#146a7c; box-shadow:0 2px 8px rgba(10,32,52,.20); }
     .nav { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .nav-left { flex: 0 1 auto; }
     .nav-right { flex: 0 1 auto; justify-content: flex-end; }
@@ -4485,15 +3889,15 @@ def css():
     .nav-unread::after { content: ""; position: absolute; top: 8px; right: 4px; width: 9px; height: 9px; border-radius: 50%; background: #dc2626; box-shadow: 0 0 0 2px #fff; }
     .floating-overlay { position: fixed; inset: 0; z-index: 2100; display: none; background: rgba(17,24,39,0.30); }
     .floating-overlay.show { display: block; }
-    .side-drawer { position: fixed; top: 12px; left: 12px; max-height: calc(100vh - 24px); width: max-content; min-width: 0; max-width: calc(100vw - 24px); z-index: 2200; display: none; overflow-y: auto; background: rgba(223,241,255,0.5); backdrop-filter: blur(10px); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 22px 60px rgba(15,23,42,0.28); padding: 8px; }
+    .side-drawer { position: fixed; top: 12px; left: 12px; max-height: calc(100vh - 24px); width: max-content; min-width: 0; max-width: calc(100vw - 24px); z-index: 2200; display: none; overflow-y: auto; background: #fff; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 22px 60px rgba(15,23,42,0.28); padding: 8px; }
     .side-drawer.show { display: block; }
-    .side-drawer .nav { display: grid; grid-template-columns: max-content; gap: 2px; width: max-content; max-width: 100%; }
-    .side-drawer .nav a, .side-drawer .nav button { width: max-content; max-width: calc(100vw - 48px); justify-content: flex-start; text-align: left; background: rgba(223,241,255,0.5); border: 0; color: var(--text); min-height: 46px; font-size: 15px; padding: 10px 12px; white-space: nowrap; }
+    .side-drawer .nav { display: grid; grid-template-columns: max-content; gap: 4px; width: max-content; max-width: 100%; }
+    .side-drawer .nav a, .side-drawer .nav button { width: max-content; max-width: calc(100vw - 48px); justify-content: flex-start; text-align: left; background: #fff; border: 0; color: var(--text); min-height: 46px; font-size: 15px; padding: 10px 12px; white-space: nowrap; }
     .side-drawer .nav a:hover, .side-drawer .nav button:hover { background: var(--blue-soft); }
-    .account-popover { position: fixed; top: 62px; right: max(8px, env(safe-area-inset-right)); left: auto; max-height: calc(100vh - 76px); width: max-content; min-width: 0; max-width: calc(100vw - 16px); z-index: 2200; display: none; overflow-y: auto; overflow-x: hidden; background: rgba(223,241,255,0.5); backdrop-filter: blur(10px); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 20px 54px rgba(15,23,42,0.24); padding: 8px; }
+    .account-popover { position: fixed; top: 62px; right: max(8px, env(safe-area-inset-right)); left: auto; max-height: calc(100vh - 76px); width: max-content; min-width: 0; max-width: calc(100vw - 16px); z-index: 2200; display: none; overflow-y: auto; overflow-x: hidden; background: #fff; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 20px 54px rgba(15,23,42,0.24); padding: 8px; }
     .account-popover.show { display: block; }
-    .account-popover .nav { display: grid; grid-template-columns: max-content; gap: 2px; width: max-content; max-width: 100%; }
-    .account-popover .nav a, .account-popover .nav button { width: max-content; max-width: calc(100vw - 40px); justify-content: flex-start; text-align: left; min-height: 44px; background: rgba(223,241,255,0.5); border: 0; color: var(--text); padding: 10px 12px; white-space: nowrap; }
+    .account-popover .nav { display: grid; grid-template-columns: max-content; gap: 4px; width: max-content; max-width: 100%; }
+    .account-popover .nav a, .account-popover .nav button { width: max-content; max-width: calc(100vw - 40px); justify-content: flex-start; text-align: left; min-height: 44px; background: #fff; border: 0; color: var(--text); padding: 10px 12px; white-space: nowrap; }
     .account-popover .nav a:hover, .account-popover .nav button:hover { background: var(--blue-soft); }
     .nav a, .nav button { color: var(--navText); background: rgba(255,255,255,0.16); border: 1px solid rgba(255,255,255,0.26); padding: 7px 11px; border-radius: 6px; cursor: pointer; font-size: 13px; text-decoration: none; transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease; }
     .nav a:hover, .nav button:hover { background: rgba(255,255,255,0.28); border-color: rgba(255,255,255,0.42); text-decoration: none; }
@@ -4586,7 +3990,7 @@ def css():
     .child-dashboard .dashboard-side { max-width: 560px; }
     .child-dashboard .selected-child-panel { max-width: 560px; padding: 14px; }
     .selected-child-panel, .mobile-child { scroll-margin-top: 86px; }
-    .child-dashboard .selected-child-head { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; margin-bottom: 8px; text-align: center; }
+    .child-dashboard .selected-child-head { margin-bottom: 8px; }
     .child-dashboard .action-buttons { margin-bottom: 6px !important; }
     .table-wrap { overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; }
@@ -4601,11 +4005,10 @@ def css():
     .pill.A { background: #eef2f6; color: #52616e; }
     .pill.F { background: var(--amber-soft); color: #8b5c00; }
     .fiche-calendar { display: grid; gap: 6px; margin-top: 12px; width: min(100%, 560px); min-width: 420px; }
-    .fiche-week { display: grid; grid-template-columns: 68px repeat(5, minmax(64px, 1fr)); gap: 5px; align-items: stretch; }
+    .fiche-week { display: grid; grid-template-columns: 68px repeat(7, minmax(64px, 1fr)); gap: 5px; align-items: stretch; }
     .fiche-week-label { border: 1px solid #e8edf3; border-radius: 6px; background: #fafbfc; padding: 7px; display: flex; flex-direction: column; justify-content: center; gap: 3px; color: #a2acb8; font-size: 11px; font-weight: 600; }
     .fiche-week-label strong { color: #8f9aa7; font-size: 12px; }
-    .fiche-day { min-height: 68px; border: 1px solid #e8edf3; border-radius: 6px; background: #fff; padding: 6px; display: grid; grid-template-rows: auto 1fr; gap: 4px; }
-    .fiche-day.with-day-name { grid-template-rows: auto auto 1fr; }
+    .fiche-day { min-height: 68px; border: 1px solid #e8edf3; border-radius: 6px; background: #fff; padding: 6px; display: grid; grid-template-rows: auto auto 1fr; gap: 4px; }
     .fiche-day.P, .fiche-day.A, .fiche-day.F { border-color: #e2e8f0; background: #fbfcfd; }
     .fiche-day-name { color: #adb6c1; font-size: 10px; font-weight: 600; text-transform: uppercase; }
     .fiche-day-date { color: #9aa5b1; font-size: 15px; line-height: 1; font-weight: 600; }
@@ -4615,7 +4018,7 @@ def css():
     .fiche-legend .pill { min-width: 24px; height: 22px; border-radius: 6px; background: transparent; color: #111827; font-size: 14px; font-weight: 900; }
     @media (max-width: 900px) {
       .fiche-calendar { width: 100%; min-width: 0; }
-      .fiche-week { grid-template-columns: 42px repeat(5, minmax(0, 1fr)); gap: 2px; }
+      .fiche-week { grid-template-columns: 42px repeat(7, minmax(0, 1fr)); gap: 2px; }
       .fiche-week-label { padding: 4px 2px; gap: 1px; font-size: 9px; text-align: center; }
       .fiche-week-label strong { font-size: 9px; }
       .fiche-day { min-height: 46px; padding: 3px 2px; gap: 1px; border-radius: 4px; }
@@ -4649,12 +4052,8 @@ def css():
     .file-action-panel { position: absolute; top: 28px; right: 0; z-index: 20; min-width: 108px; display: grid; gap: 4px; padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: #fff; box-shadow: 0 12px 28px rgba(16, 55, 82, 0.16); }
     .file-action-panel .btn { width: 100%; min-height: 28px; padding: 5px 8px; font-size: 12px; line-height: 1; border-radius: 4px; justify-content: flex-start; }
     .file-actions .btn.file-delete { background: #fee2e2; border-color: #fecaca; color: #991b1b; }
-    .mail-recipient-layout { position: relative; display: block; }
-    .mail-recipient-anchor { position: relative; }
-    .mail-send-to-trigger { display: inline-block; margin: 0 0 4px; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-weight: 700; text-align: left; cursor: pointer; }
-    .mail-send-to-trigger:hover { text-decoration: underline; }
-    .mail-send-to { min-height: 68px; border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 8px; display: flex; flex-direction: column; gap: 0; cursor: pointer; }
-    .mail-send-to:focus, .mail-send-to[aria-expanded="true"] { outline: 2px solid var(--blue); outline-offset: 1px; }
+    .mail-recipient-layout { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(240px, 1.3fr); gap: 12px; align-items: start; }
+    .mail-send-to { min-height: 150px; border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 8px; display: flex; flex-direction: column; gap: 0; }
     .mail-send-to-empty { color: var(--muted); font-size: 13px; padding: 6px 2px; }
     .mail-recipient-pill { border: 1px solid var(--line); border-radius: 6px; background: #f8fafc; padding: 0 8px; text-align: left; cursor: pointer; font: inherit; line-height: 1.2; color: var(--text); }
     .mail-recipient-pill:hover { background: var(--blue-soft); }
@@ -4667,133 +4066,17 @@ def css():
     .mail-target-row:hover { background: var(--blue-soft); }
     .mail-target-row span { min-width: 0; overflow-wrap: anywhere; }
     .mail-target-empty { padding: 10px; color: var(--muted); font-size: 13px; }
-    .mail-recipient-popover { position: absolute; z-index: 80; top: calc(100% + 6px); left: 0; width: min(560px, calc(100vw - 40px)); padding: 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: #fff; box-shadow: 0 12px 30px rgba(15, 23, 42, 0.18); }
-    .mail-recipient-popover[hidden] { display: none; }
-    .mail-recipient-popover-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
-    .mail-recipient-popover-close { border: 0; background: transparent; color: var(--muted); font-size: 20px; line-height: 1; cursor: pointer; }
     .mail-folder-files { max-height: 160px; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; background: #fff; padding: 6px; display: grid; gap: 4px; }
     .mail-folder-file { display: flex; align-items: center; gap: 7px; min-height: 24px; font-size: 12px; line-height: 1; }
     .mail-folder-file input { margin: 0; }
     .mail-folder-file span { overflow-wrap: anywhere; }
     .profile-form textarea { min-height: 58px; }
     .child-bottom-nav { display: none; }
-    /* Unified application visual system: calm, compact and consistent. */
-    :root {
-      --bg: #f3f6f9;
-      --panel: #ffffff;
-      --panel-soft: #f7f9fb;
-      --text: #172534;
-      --muted: #667585;
-      --line: #dfe6ec;
-      --line-strong: #c8d3dd;
-      --blue: #2775a9;
-      --green: #16875b;
-      --gray: #647282;
-      --amber: #c98318;
-      --red: #c74455;
-      --nav: #153e59;
-      --focus: rgba(39, 117, 169, 0.16);
-      --blue-soft: #eaf3f9;
-      --green-soft: #e8f5ef;
-      --amber-soft: #fff5e3;
-      --red-soft: #fceef0;
-    }
-    html { background: var(--bg); }
-    body {
-      background: var(--bg);
-      color: var(--text);
-      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      font-size: 14px;
-      line-height: 1.5;
-      -webkit-font-smoothing: antialiased;
-    }
-    a { color: #1f6f9f; text-underline-offset: 3px; }
-    :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
-    .topbar {
-      background: var(--nav);
-      padding: 10px clamp(14px, 2vw, 24px);
-      gap: 10px;
-      box-shadow: 0 3px 14px rgba(20, 45, 63, 0.16);
-    }
-    .brand { font-weight: 800; text-shadow: none; letter-spacing: -0.01em; }
-    .brand-logo { width: 42px; height: 42px; flex-basis: 42px; border-width: 1px; box-shadow: none; }
-    .menu-toggle, .back-toggle, .account-toggle, .nav a, .nav button {
-      border-radius: 9px;
-      transition: background-color 140ms ease, border-color 140ms ease, transform 140ms ease;
-    }
-    .menu-toggle:hover, .back-toggle:hover, .account-toggle:hover, .nav a:hover, .nav button:hover { transform: translateY(-1px); }
-    .side-drawer, .account-popover {
-      border-color: var(--line);
-      border-radius: 14px;
-      box-shadow: 0 18px 48px rgba(18, 39, 54, 0.18);
-      padding: 7px;
-    }
-    .side-drawer .nav a, .side-drawer .nav button, .account-popover .nav a, .account-popover .nav button { border-radius: 8px; }
-    .wrap { max-width: 1480px; padding: 24px clamp(14px, 2vw, 28px) 36px; }
-    .grid { gap: 18px; }
-    .two-col { gap: 18px; }
-    .panel {
-      border-color: var(--line);
-      border-radius: 14px;
-      padding: clamp(15px, 1.7vw, 22px);
-      box-shadow: 0 4px 16px rgba(19, 44, 61, 0.055);
-    }
-    .panel h1, .panel h2, .panel h3 { color: #183247; letter-spacing: -0.018em; }
-    .panel h2 { font-size: 20px; }
-    .panel h3 { font-size: 16px; }
-    .toolbar { gap: 12px; margin-bottom: 16px; }
-    label { color: #586978; font-weight: 650; }
-    input, select, textarea {
-      min-height: 40px;
-      border-color: var(--line-strong);
-      border-radius: 9px;
-      padding: 9px 11px;
-      transition: border-color 140ms ease, box-shadow 140ms ease;
-    }
-    textarea { line-height: 1.45; }
-    .btn {
-      min-height: 40px;
-      border-radius: 9px;
-      padding: 9px 14px;
-      font-weight: 700;
-      box-shadow: none;
-      transition: background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
-    }
-    .btn:hover { filter: none; transform: translateY(-1px); box-shadow: 0 5px 12px rgba(20, 49, 68, 0.11); }
-    .btn:active { transform: translateY(0); }
-    .btn.gray { background: #edf2f5; border-color: #dae3e9; }
-    .btn.ghost { background: #fff; }
-    .action-card, .dashboard-chart, .file-card, .mail-card, .muted-box {
-      border-color: var(--line);
-      border-radius: 11px;
-      background: var(--panel-soft);
-    }
-    .stats { gap: 10px; margin-bottom: 14px; }
-    .stat { min-height: 52px; border-radius: 11px; padding: 10px 12px; background: #f8fafb; }
-    .stat .muted { font-size: 12px; }
-    .stat .value { color: #1d5d84; font-size: 20px; font-weight: 800; }
-    .cards { gap: 10px; }
-    .card { border-radius: 11px; padding: 7px; gap: 8px; }
-    .card-link:hover .card { transform: translateY(-1px); box-shadow: 0 7px 18px rgba(19, 44, 61, 0.10); }
-    .name { color: #20384a; font-size: 13px; }
-    .class-tag, .badge { padding: 2px 7px; line-height: 1.25; }
-    .table-wrap { border: 1px solid var(--line); border-radius: 11px; background: #fff; }
-    table { border-collapse: separate; border-spacing: 0; }
-    th, td { padding: 10px 12px; border-bottom-color: var(--line); }
-    th { background: #f5f8fa; color: #4e6070; font-size: 12px; letter-spacing: 0.01em; }
-    tbody tr:last-child td { border-bottom: 0; }
-    tbody tr:hover td { background: #f8fbfd; }
-    .alert { border-radius: 10px; padding: 11px 13px; }
-    .wait-box { border-radius: 14px; }
-    @media (prefers-reduced-motion: reduce) {
-      *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
-    }
     @media (max-width: 1180px) { .two-col, .user-grid, .dashboard-overview, .dashboard-charts { grid-template-columns: 1fr; } .dashboard-side { margin-top: 0; } }
     @media (max-width: 720px) {
       body { font-size: 14px; background: var(--bg); }
       .topbar { position: static; padding: 10px 12px; align-items: stretch; }
-      .brand { width:100%; font-size:clamp(16px, 5vw, 22px); line-height:1.15; }
-      .brand-logo { width:40px; height:40px; flex-basis:40px; }
+      .brand { width: 100%; font-size: 22px; line-height: 1.15; }
       .nav { width: 100%; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
       .nav-left, .nav-right { width: 100%; justify-content: stretch; }
       .topbar-spacer { display: none; }
@@ -4844,7 +4127,7 @@ def css():
       .stats-calendar { margin-top: 4px; }
       .stats-calendar table { min-width: 0; }
       .fiche-calendar { width: 100%; min-width: 0; gap: 3px; }
-      .fiche-week { grid-template-columns: 32px repeat(5, minmax(0, 1fr)); gap: 1px; }
+      .fiche-week { grid-template-columns: 32px repeat(7, minmax(0, 1fr)); gap: 1px; }
       .fiche-week-label { flex-direction: column; justify-content: center; align-items: center; padding: 2px 1px; gap: 1px; font-size: 8px; text-align: center; }
       .fiche-week-label strong { font-size: 8px; line-height: 1; }
       .fiche-week-label span { font-size: 7px; line-height: 1.05; }
@@ -4858,43 +4141,16 @@ def css():
       .file-card, .mail-card { padding: 8px; min-height: 0; }
       .file-actions { top: 8px; right: 8px; }
       .mail-folder-files { max-height: 120px; }
-      .mail-target-list { min-height: 96px; max-height: 180px; }
-      .mail-send-to { min-height: 68px; max-height: 180px; }
+      .mail-target-list, .mail-send-to { min-height: 96px; max-height: 180px; }
       .mail-target-row, .mail-target-head { grid-template-columns: minmax(92px, 0.9fr) minmax(110px, 1.1fr); gap: 6px; padding: 6px 8px; }
       body.child-mobile-nav { padding-bottom: 76px; }
       body.child-mobile-nav .topbar-menu-row { display: none; }
       body.child-mobile-nav .topbar { position: sticky; top: 0; padding: 12px; }
       body.child-mobile-nav .brand { text-align: center; font-size: 18px; line-height: 1.2; }
-      body.child-mobile-nav .account-popover { top: auto; right: 8px; bottom: calc(72px + env(safe-area-inset-bottom)); width: max-content; min-width: 0; max-width: calc(100vw - 16px); max-height: min(360px, calc(100vh - 96px)); padding: 7px; }
-      body.child-mobile-nav .account-popover .nav { width: max-content; gap: 2px; }
-      body.child-mobile-nav .account-popover .nav a,
-      body.child-mobile-nav .account-popover .nav button { width: max-content; min-width: 0; min-height: 38px; padding: 8px 14px; border-radius: 999px; }
-      body.child-mobile-nav .account-popover .nav a[href="/profile"],
-      body.child-mobile-nav .account-popover .nav a[href="/password-change"],
-      body.child-mobile-nav .account-popover .nav form button { background: rgba(223,241,255,0.5); color: #145b8f; }
-      body.child-mobile-nav .account-popover .nav a[href="/profile"]:hover,
-      body.child-mobile-nav .account-popover .nav a[href="/password-change"]:hover,
-      body.child-mobile-nav .account-popover .nav form button:hover { background: #c9e8ff; }
-      body.staff-mobile-nav .side-drawer,
-      body.staff-mobile-nav .account-popover { width:max-content; min-width:0; max-width:calc(100vw - 16px); padding:7px; }
-      body.staff-mobile-nav .side-drawer .nav,
-      body.staff-mobile-nav .account-popover .nav { width:max-content; gap:2px; }
-      body.staff-mobile-nav .side-drawer .nav a,
-      body.staff-mobile-nav .side-drawer .nav button,
-      body.staff-mobile-nav .account-popover .nav a,
-      body.staff-mobile-nav .account-popover .nav button { width:max-content; min-width:0; min-height:38px; padding:8px 14px; border:0; border-radius:999px; background:rgba(223,241,255,0.5); color:#145b8f; }
-      body.staff-mobile-nav .side-drawer .nav a:hover,
-      body.staff-mobile-nav .side-drawer .nav button:hover,
-      body.staff-mobile-nav .account-popover .nav a:hover,
-      body.staff-mobile-nav .account-popover .nav button:hover { background:#c9e8ff; color:#145b8f; }
+      body.child-mobile-nav .account-popover { top: auto; right: 8px; bottom: calc(72px + env(safe-area-inset-bottom)); width: min(220px, calc(100vw - 16px)); max-height: min(360px, calc(100vh - 96px)); }
       body.child-mobile-nav .child-desktop-only { display: none !important; }
       body.child-mobile-nav .child-mobile-mail-history { display: none !important; }
       body.staff-mobile-nav .child-mobile-mail-history { display: none !important; }
-      body.child-mobile-nav .mail-page-sent-history, body.staff-mobile-nav .mail-page-sent-history { display:none !important; }
-      body.child-mobile-nav form[action="/mail/send"] .mail-send-to { min-height:40px; max-height:180px; padding:4px 8px; justify-content:center; }
-      body.child-mobile-nav form[action="/mail/send"] .mail-send-to-empty { padding:0 2px; line-height:1.2; }
-      body.child-mobile-nav form[action="/mail/send"] textarea[name="body"] { min-height:40px; height:40px; padding:7px 9px; }
-      body.non-management-staff .nav-left a[href="/calendar"], body.non-management-staff .nav-left a[href="/reports"] { display:none !important; }
       .child-bottom-nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1800; display: grid; grid-template-columns: repeat(5, 1fr); gap: 0; background: rgba(255,255,255,0.98); border-top: 1px solid var(--line); box-shadow: 0 -8px 24px rgba(16,55,82,0.12); padding: 5px 6px calc(5px + env(safe-area-inset-bottom)); }
       .child-bottom-nav a, .child-bottom-nav button { min-width: 0; width: 100%; min-height: 54px; border: 0; background: transparent; color: #707b86; text-decoration: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font: inherit; cursor: pointer; padding: 4px 2px; }
       .child-bottom-nav a:hover, .child-bottom-nav button:hover { text-decoration: none; color: var(--blue); }
@@ -4959,773 +4215,8 @@ def css():
     .wait-text { color: var(--muted); font-size: 13px; margin-top: 2px; }
     .btn.busy { pointer-events: none; opacity: 0.82; }
     @keyframes wait-spin { to { transform: rotate(360deg); } }
-    .side-drawer, .account-popover { background: rgba(223,241,255,0.5); border: 0; box-shadow: none; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
-    .side-drawer { width: max-content; min-width: 0; padding-left: 5px; padding-right: 5px; }
-    .side-drawer .nav a, .side-drawer .nav button,
-    .account-popover .nav a, .account-popover .nav button { min-height: 34px !important; padding: 5px 8px !important; font-size: 16px !important; line-height: 1.35 !important; background: rgba(223,241,255,0.5) !important; border: 0 !important; box-shadow: none !important; }
-    .side-drawer .nav a, .side-drawer .nav button { padding-left: 6px !important; padding-right: 6px !important; }
-    .panel {
-      background: rgba(255,255,255,var(--text-window-opacity)) !important;
-      backdrop-filter: blur(2px);
-      -webkit-backdrop-filter: blur(2px);
-    }
-    .action-card, .dashboard-chart, .file-card, .mail-card, .muted-box,
-    .stat, .table-wrap {
-      background: rgba(255,255,255,var(--text-surface-opacity)) !important;
-      backdrop-filter: blur(1.5px);
-      -webkit-backdrop-filter: blur(1.5px);
-    }
-    .card { background: rgba(255,255,255,var(--text-card-opacity)) !important; }
-    .card.present { background: rgba(228,246,238,var(--text-window-opacity)) !important; }
-    table { background: transparent; }
-    th { background: rgba(245,248,250,var(--text-window-opacity)) !important; }
-    td { background-color: rgba(255,255,255,var(--text-cell-opacity)); }
-    tbody tr:hover td { background: rgba(248,251,253,var(--text-card-opacity)) !important; }
-    input, select, textarea { background: rgba(255,255,255,var(--text-input-opacity)); }
-    select option { background: #fff; color: var(--text); }
-    body {
-      background-color: var(--bg);
-      background-image: linear-gradient(rgba(223,234,241,var(--app-background-overlay)) 0, rgba(238,244,247,var(--app-background-overlay)) 260px), url("/app-background.png");
-      background-position: 0 0, center center;
-      background-size: auto, cover;
-      background-repeat: no-repeat;
-      background-attachment: scroll, fixed;
-    }
-    @media print { .topbar, .no-print { display: none !important; } body { background: white !important; background-image:none !important; } .wrap { max-width: none; padding: 0; } .panel { border: none; box-shadow: none; } }
+    @media print { .topbar, .no-print { display: none !important; } body { background: white; } .wrap { max-width: none; padding: 0; } .panel { border: none; box-shadow: none; } }
     </style>
-    """.replace("__APP_BACKGROUND_OVERLAY__", f"{background_overlay:.2f}") \
-        .replace("__TEXT_WINDOW_OPACITY__", f"{text_window_opacity:.2f}") \
-        .replace("__TEXT_SURFACE_OPACITY__", f"{text_surface_opacity:.2f}") \
-        .replace("__TEXT_CARD_OPACITY__", f"{text_card_opacity:.2f}") \
-        .replace("__TEXT_INPUT_OPACITY__", f"{text_input_opacity:.2f}") \
-        .replace("__TEXT_CELL_OPACITY__", f"{text_cell_opacity:.2f}") \
-        .replace("__TEXT_LOGIN_OPACITY__", f"{text_login_opacity:.2f}")
-
-GLOBAL_UI_TRANSLATIONS = (
-    ("Tableau enfants", "Children dashboard"),
-    ("Tableau", "Dashboard"),
-    ("Agenda", "Agenda"),
-    ("Calendrier", "Calendar"),
-    ("Enfants Allergiques", "Allergic children"),
-    ("Présences éducatrices", "Staff attendance"),
-    ("Contacts", "Contacts"),
-    ("Fiche 4 semaines", "4-week report"),
-    ("Dates fermées", "Closed dates"),
-    ("Inviter", "Invite"),
-    ("Account", "Account"),
-    ("Compte", "Account"),
-    ("Lieu travail mobile", "Mobile work location"),
-    ("Page connexion", "Login page"),
-    ("Project", "Project"),
-    ("Projet", "Project"),
-    ("Présence", "Attendance"),
-    ("Profil", "Profile"),
-    ("Fichiers", "Files"),
-    ("Message", "Message"),
-    ("Mot de passe", "Password"),
-    ("Journaux", "Audit logs"),
-    ("Déconnexion", "Sign out"),
-    ("Retour", "Back"),
-    ("Menu", "Menu"),
-    ("Accueil", "Home"),
-    ("Nom", "Name"),
-    ("Prénom", "First name"),
-    ("Nom d’utilisateur", "Username"),
-    ("Username", "Username"),
-    ("Password", "Password"),
-    ("Nouveau mot de passe", "New password"),
-    ("Confirmer le mot de passe", "Confirm password"),
-    ("Ancien mot de passe", "Current password"),
-    ("Date", "Date"),
-    ("Heure", "Time"),
-
-    ("Groupe", "Group"),
-    ("Groupes", "Groups"),
-    ("Classe", "Class"),
-    ("Rôle", "Role"),
-    ("Statut", "Status"),
-    ("Status", "Status"),
-    ("Toute", "All"),
-    ("Tous", "All"),
-    ("Toutes", "All"),
-    ("Présent", "Present"),
-    ("Présents", "Present"),
-    ("Absence", "Absent"),
-    ("Absent", "Absent"),
-    ("Absents", "Absent"),
-    ("Fermé", "Closed"),
-    ("Fermée", "Closed"),
-    ("Actif", "Active"),
-    ("Inactive", "Inactive"),
-    ("Oui", "Yes"),
-    ("Non", "No"),
-    ("Enregistrer", "Save"),
-    ("Sauvegarder", "Save"),
-    ("Enregistrer les modifications", "Save changes"),
-    ("Annuler", "Cancel"),
-    ("Fermer", "Close"),
-    ("Confirmer", "Confirm"),
-    ("Supprimer", "Delete"),
-    ("Suppression", "Deletion"),
-    ("Modifier", "Edit"),
-    ("Ajouter", "Add"),
-    ("Créer", "Create"),
-    ("Restaurer", "Restore"),
-    ("Rechercher", "Search"),
-    ("Filtrer", "Filter"),
-    ("Choisir", "Choose"),
-    ("Sélectionner", "Select"),
-    ("Afficher", "Show"),
-    ("Masquer", "Hide"),
-    ("Ouvrir", "Open"),
-    ("Télécharger", "Download"),
-    ("Importer", "Import"),
-    ("Exporter", "Export"),
-    ("Envoyer", "Send"),
-    ("Renvoyer", "Resend"),
-    ("Actualiser", "Refresh"),
-    ("Continuer", "Continue"),
-    ("Suivant", "Next"),
-    ("Précédent", "Previous"),
-    ("Détails", "Details"),
-    ("Actions", "Actions"),
-    ("Action", "Action"),
-    ("Notes", "Notes"),
-    ("Note", "Note"),
-    ("Description", "Description"),
-    ("Adresse", "Address"),
-    ("Téléphone", "Phone"),
-    ("Courriel", "Email"),
-    ("E-mail", "Email"),
-    ("Aujourd’hui", "Today"),
-    ("Aujourd'hui", "Today"),
-    ("Hier", "Yesterday"),
-    ("Demain", "Tomorrow"),
-    ("Créé", "Created"),
-    ("Créée", "Created"),
-    ("Mis à jour", "Updated"),
-    ("Par", "By"),
-    ("De", "From"),
-    ("À", "To"),
-    ("De / From", "From"),
-    ("À / To", "To"),
-    ("Subject", "Subject"),
-    ("Sujet", "Subject"),
-    ("Pièces jointes", "Attachments"),
-    ("Attachments from this device", "Attachments from this device"),
-    ("Destinataire", "Recipient"),
-    ("Destinataires", "Recipients"),
-    ("MESSAGE REÇUS", "RECEIVED MESSAGES"),
-    ("MESSAGES REÇUS", "RECEIVED MESSAGES"),
-    ("MESSAGES ENVOYÉS", "SENT MESSAGES"),
-    ("Aucun message.", "No messages."),
-    ("Aucun MESSAGE.", "No messages."),
-    ("Aucun MESSAGE envoyé.", "No sent messages."),
-    ("MESSAGE envoyé.", "Message sent."),
-    ("No MESSAGE.", "No messages."),
-    ("No MESSAGE sent.", "No sent messages."),
-    ("No files uploaded.", "No files uploaded."),
-    ("Aucun fichier.", "No files."),
-    ("Fichier", "File"),
-    ("Fichiers reçus", "Received files"),
-    ("Téléverser", "Upload"),
-    ("Téléversé", "Uploaded"),
-    ("Arrivée", "Arrival"),
-    ("Départ", "Departure"),
-    ("Arrivée visage", "Face arrival"),
-    ("Départ visage", "Face departure"),
-    ("Enregistrer le visage", "Enroll face"),
-    ("Réinscription visage", "Face re-enrollment"),
-    ("Horaire", "Schedule"),
-    ("Horaire du jour", "Today's schedule"),
-    ("Heure prévue", "Scheduled time"),
-    ("Heure réelle", "Actual time"),
-    ("Enfants", "Children"),
-    ("Enfant", "Child"),
-    ("Employés", "Employees"),
-    ("Employé", "Employee"),
-    ("Éducatrice", "Educator"),
-    ("Éducatrices", "Educators"),
-    ("Enseignant", "Teacher"),
-    ("Enseignante", "Teacher"),
-    ("Teacher", "Teacher"),
-    ("Teachers", "Teachers"),
-    ("Directrice", "Principal"),
-    ("Direction", "Management"),
-    ("Patron", "Boss"),
-    ("Boss", "Boss"),
-    ("Cook", "Cook"),
-    ("Cuisinier", "Cook"),
-    ("Consignes", "Instructions"),
-    ("Sieste", "Nap"),
-    ("Beau sommeil", "Sleep quality"),
-    ("Repos", "Rest"),
-    ("Raison", "Reason"),
-    ("Participation", "Participation"),
-    ("Dîner", "Meal"),
-    ("Repas", "Meal"),
-    ("Repas :", "Meal:"),
-    ("Déroulement de la journée", "Daily summary"),
-    ("Communication", "Communication"),
-    ("Enregistrer la communication", "Save communication"),
-    ("Communication enregistrée.", "Communication saved."),
-    ("Un peu", "A little"),
-    ("Bien", "Good"),
-    ("Excellent", "Excellent"),
-    ("Passable", "Fair"),
-    ("Bonne", "Good"),
-    ("Active", "Active"),
-    ("Raisonnable", "Reasonable"),
-    ("Formidable", "Great"),
-    ("Bon", "Good"),
-    ("Difficile", "Difficult"),
-    ("Rapport du jour", "Daily report"),
-    ("Agenda déjà envoyé — les modifications remplaceront la version de cette date.", "Agenda already sent — changes will replace this date's version."),
-    ("Enregistrer / renvoyer les agendas", "Save / resend agendas"),
-    ("Envois récents", "Recent submissions"),
-    ("Aucun envoi.", "No submissions."),
-    ("Aucun événement pour le moment.", "No entries yet."),
-    ("Aucun enfant présent ou déjà enregistré pour cette date.", "No child present or already recorded for this date."),
-    ("Aucun compte enfant actif. La fiche ne peut pas être envoyée.", "No active child account. The form cannot be sent."),
-    ("Créer un projet", "Create a project"),
-    ("Nom du projet / garderie", "Project / childcare name"),
-    ("Nom du propriétaire", "Owner name"),
-    ("Créer le projet", "Create project"),
-    ("Retour connexion", "Back to sign in"),
-    ("Textes de la page de connexion", "Login page text"),
-    ("Description de la marque", "Brand description"),
-    ("Texte d’introduction", "Introduction text"),
-    ("Fonction 1", "Feature 1"),
-    ("Fonction 2", "Feature 2"),
-    ("Fonction 3", "Feature 3"),
-    ("Fonction 4", "Feature 4"),
-    ("Fonction 5", "Feature 5"),
-    ("Prix", "Price"),
-    ("Période d’essai gratuit", "Free trial period"),
-    ("Paramètres", "Settings"),
-    ("Configuration", "Configuration"),
-    ("Coordonnées du lieu de travail", "Work location coordinates"),
-    ("Rayon autorisé", "Allowed radius"),
-    ("Latitude", "Latitude"),
-    ("Longitude", "Longitude"),
-    ("Appareils", "Devices"),
-    ("Appareil", "Device"),
-    ("Autorisé", "Approved"),
-    ("En attente", "Pending"),
-    ("Refusé", "Rejected"),
-    ("Motif", "Reason"),
-    ("Source", "Source"),
-    ("Historique", "History"),
-    ("Archives", "Archives"),
-    ("Archive supprimés", "Deleted archives"),
-    ("Comptes supprimés", "Deleted accounts"),
-    ("Restaurer le compte", "Restore account"),
-    ("Aucune donnée.", "No data."),
-    ("Aucun résultat.", "No results."),
-    ("Aucun", "None"),
-    ("Aucune", "None"),
-    ("Obligatoire", "Required"),
-    ("Facultatif", "Optional"),
-    ("Erreur", "Error"),
-    ("Succès", "Success"),
-    ("Attention", "Warning"),
-    ("Traitement...", "Processing..."),
-    ("Processing...", "Processing..."),
-    ("Veuillez patienter. Ne cliquez pas de nouveau.", "Please wait. Do not click again."),
-    ("Please wait. Do not click again.", "Please wait. Do not click again."),
-    ("Vous avez des modifications non enregistrées. Quitter sans enregistrer ?", "You have unsaved changes. Leave without saving?"),
-    ("Confirmer la suppression ? Cette action sera exécutée après votre confirmation.", "Confirm deletion? This action will run after your confirmation."),
-    ("Confirmer l’enregistrement de ces modifications ?", "Confirm saving these changes?"),
-    ("Confirmer arrivée", "Confirm arrival"),
-    ("Confirmer départ", "Confirm departure"),
-    ("Aucun enregistrement", "No records"),
-    ("Recent records", "Recent records"),
-    ("My Attendance", "My Attendance"),
-    ("No records", "No records"),
-    ("Privacy Policy", "Privacy Policy"),
-    ("Politique de confidentialité", "Privacy Policy"),
-    ("Langue", "Language"),
-    ("Français", "French"),
-    ("Anglais", "English"),
-)
-
-
-# Fixed interface text used across role-specific pages. User-entered data, names,
-# class names, message bodies, file names, and audit payloads remain untranslated.
-GLOBAL_UI_TRANSLATIONS = GLOBAL_UI_TRANSLATIONS + (
-    ("ENVOYER À", "SEND TO"),
-    ("Aucun destinataire sélectionné.", "No MESSAGE recipient selected."),
-    ("DESTINATAIRE DU MESSAGE", "MESSAGE RECIPIENT"),
-    ("Aucun destinataire disponible", "No MESSAGE recipient available"),
-    ("Cliquez pour retirer", "Click to remove"),
-    ("Veuillez choisir au moins un destinataire.", "Please choose at least one MESSAGE recipient."),
-    ("Veuillez choisir un seul destinataire.", "Please choose only one MESSAGE recipient."),
-    ("MESSAGE envoyé.", "MESSAGE sent."),
-    ("Enregistrer le profil", "Save profile"),
-    ("Enregistrer le mot de passe", "Save password"),
-    ("Modifier le mot de passe", "Change password"),
-    ("Le mot de passe doit être renouvelé tous les 30 jours.", "Password rotation is required every 30 days."),
-    ("Lun", "Mon"),
-    ("Mar", "Tue"),
-    ("Mer", "Wed"),
-    ("Jeu", "Thu"),
-    ("Ven", "Fri"),
-    ("Sam", "Sat"),
-    ("Dim", "Sun"),
-    ("Jan", "Jan"),
-    ("Fév", "Feb"),
-
-    ("Avr", "Apr"),
-    ("Mai", "May"),
-    ("Juin", "Jun"),
-    ("Juil", "Jul"),
-    ("Août", "Aug"),
-    ("Sept", "Sep"),
-    ("Oct", "Oct"),
-    ("Nov", "Nov"),
-    ("Déc", "Dec"),
-    ("Sorti", "Checked out"),
-    ("Déjà sorti", "Already checked out"),
-    ("Déjà présent", "Already present"),
-    ("Présents / inscrits", "Present / enrolled"),
-    ("Exporter Excel", "Export Excel"),
-    ("Enregistrer sous", "Save as"),
-    ("Réinitialiser l’appareil", "Reset device"),
-    ("Supprimer la journée", "Delete day"),
-    ("Effacer la journée", "Clear day"),
-    ("Charger la liste", "Load list"),
-    ("Aucun enfant trouvé pour ce périmètre.", "No children found for this scope."),
-    ("Aucune photo", "No photo"),
-    ("Aucun enfant sélectionné", "No child selected"),
-    ("Aucune donnée", "No data"),
-    ("Ce compte n'est pas lié à une fiche employé.", "This account is not linked to an employee record."),
-    ("Dans la gestion des utilisateurs, indiquez l’identifiant de personne liée correspondant à cette personne.", "In User Management, enter the Linked person ID matching this person in the PEOPLE/teachers list."),
-    ("Mois", "Month"),
-    ("PLANIFIÉS 28 JOURS", "PLANNED 28 DAYS"),
-    ("Nb", "Count"),
-    ("Prés.", "Pres."),
-    ("Vac.", "Vac."),
-    ("Mal.", "Sick"),
-    ("Aucun enfant présent avec des allergies enregistrées.", "No present child has recorded allergies."),
-    ("Liste des téléphones et courriels", "Phone and e-mail list"),
-    ("Nom ▲", "Name ▲"),
-    ("Nom ▼", "Name ▼"),
-    ("Téléphones", "Phones"),
-    ("Rapports", "Reports"),
-    ("Fiche 4 semaines", "4-Week Fiche"),
-    ("Format", "Format"),
-    ("Détaillée 4 semaines", "Detailed 4 week"),
-    ("Résumé 4 semaines", "Summary 4 week"),
-    ("Semaine 1", "Week 1"),
-    ("Semaine 2", "Week 2"),
-    ("Semaine 3", "Week 3"),
-    ("Semaine 4", "Week 4"),
-    ("Toute :", "All:"),
-    ("Générer le PDF", "Generate PDF"),
-    ("Gérer les dates fermées", "Manage Closed Dates"),
-    ("Ajouter une date F", "Add an F date"),
-    ("Dates fermées actuelles", "Current Closed Dates"),
-    ("INVITATIONS", "INVITATIONS"),
-    ("Ajouter un utilisateur", "Add user"),
-    ("Ajouter génère automatiquement une invitation mobile pour terminer l'inscription.", "Add automatically creates a mobile invitation to complete registration."),
-    ("Courriel d’invitation", "Invitation email"),
-    ("Modifier et supprimer des utilisateurs.", "Edit and delete users."),
-    ("Exporter la liste des comptes", "Export account list"),
-    ("Classes", "Classes"),
-    ("Appareil mobile", "Mobile device"),
-    ("Mot de passe modifié", "Password changed"),
-    ("Cartes à imprimer", "Printable cards"),
-    ("Chemin de la photo", "Photo path"),
-    ("Rayon en mètres", "Radius in metres"),
-    ("Projets", "Projects"),
-    ("Type", "Type"),
-    ("Horodatage", "Timestamp"),
-    ("Événement", "Event"),
-    ("À", "To"),
-    ("Dossier du propriétaire", "Folder owner"),
-    ("Début", "Start"),
-    ("Fin", "End"),
-    ("Total des heures travaillées", "Work hours total"),
-    ("Total des heures planifiées", "Schedule hours Total"),
-    ("Jours", "Days"),
-    ("Événements", "Events"),
-    ("6 SEMAINES", "6 WEEKS"),
-    ("TRAVAIL", "WORK"),
-    ("HEURES TRAVAILLÉES", "WORK HOURS"),
-    ("Registres récents des éducatrices", "Recent teacher records"),
-    ("Champ", "Field"),
-    ("Ancienne valeur", "Old"),
-    ("Nouvelle valeur", "New"),
-    ("Photo", "Photo"),
-    ("Aucun registre de présence du personnel pour cette date.", "No teacher attendance records for this date."),
-    ("Présences des éducatrices", "Teacher Attendance"),
-    ("Première arrivée", "First in"),
-    ("Dernier départ", "Last out"),
-    ("ENTRÉE PLANIFIÉE", "SCHEDULE IN"),
-    ("SORTIE PLANIFIÉE", "SCHEDULE OUT"),
-    ("HISTORIQUE DES PRÉSENCES", "ATTENDANCE HISTORY"),
-    ("Inviter un utilisateur mobile", "Invite mobile user"),
-    ("Personne", "Person"),
-    ("Prénom Nom (Enfant - Groupe)", "First Last name (Child - Group)"),
-    ("Valide pendant", "Valid for"),
-    ("7 jours", "7 days"),
-    ("14 jours", "14 days"),
-    ("30 jours", "30 days"),
-    ("Lien", "Link"),
-    ("Expirée", "Expired"),
-    ("Icônes GROUP", "GROUP icons"),
-    ("Le nom du fichier doit correspondre au mot distinctif du groupe. Exemple : PANDAS.PNG → POUP LES PANDAS.", "The file name must match the distinctive group word. Example: PANDAS.PNG → POUP LES PANDAS."),
-    ("Avatars des cartes", "Card avatars"),
-    ("Le nom du fichier doit correspondre au nom de l'enfant. Seul le visage détecté est enregistré.", "The file name must match the child's name. Only the detected face is saved."),
-    ("Ajouter des avatars", "Add avatars"),
-    ("Supprimer la sélection", "Delete selection"),
-    ("Avatar enfant", "Child avatar"),
-    ("Ajouter un avatar", "Add avatar"),
-    ("ALLERGIES ALIMENTAIRES", "FOOD ALLERGIES"),
-    ("Utilisation des dates sélectionnées", "Use of selected dates"),
-    ("VACANCES", "VACATION"),
-    ("MALADIE", "ILLNESS"),
-    ("Autre", "Other"),
-    ("Mobile", "Mobile"),
-    ("Ma présence", "My attendance"),
-    ("Enfants présents par 15 min", "Children present every 15 min"),
-    ("Changements par 15 min", "Changes every 15 min"),
-    ("Actuel", "Current"),
-    ("Total", "Total"),
-    ("T", "T"),
-    ("Rôle", "Role"),
-    ("Nom", "Name"),
-    ("Fermer", "Close"),
-    ("Envoi", "Sending"),
-    ("Impossible de lire l’image", "Cannot read image"),
-    ("Ce navigateur n’a pas pu redimensionner la photo sélectionnée. Choisissez une photo plus petite et réessayez.", "This browser could not resize the selected photo. Please choose a smaller photo and send again."),
-    ("Aucun enregistrement.", "No records."),
-    ("Interdit", "Forbidden"),
-    ("Cette page est réservée au personnel.", "This page is for staff accounts only."),
-    ("Cette page est réservée aux éducatrices.", "This page is for teachers only."),
-    ("Profil d’éducatrice lié introuvable.", "Linked teacher profile not found."),
-    ("Introuvable", "Not Found"),
-    ("Enregistrer les dates", "Save dates"),
-    ("Retirer", "Remove"),
-    ("Ajouter le groupe", "Add group"),
-    ("Ajouter une personne", "Add person"),
-    ("Aucun utilisateur.", "No users."),
-    ("Aucun enfant.", "No children."),
-    ("Aucun contact.", "No contacts."),
-    ("Aucun fichier téléversé.", "No files uploaded."),
-    ("Aucun message reçu.", "No received messages."),
-    ("Messages reçus", "Received messages"),
-    ("Messages envoyés", "Sent messages"),
-    ("Pièces jointes de cet appareil", "Attachments from this device"),
-    ("Utilisateur", "User"),
-    ("Personne liée", "Linked person"),
-    ("Identifiant de personne liée", "Linked person ID"),
-    ("Classes autorisées", "Allowed classes"),
-    ("Créé le", "Created at"),
-    ("Mis à jour le", "Updated at"),
-    ("Dernière connexion", "Last login"),
-    ("État", "State"),
-    ("Approbation", "Approval"),
-    ("Révoquer", "Revoke"),
-    ("Approuver", "Approve"),
-    ("Refuser", "Reject"),
-    ("Réinitialiser", "Reset"),
-    ("Imprimer", "Print"),
-    ("Vue détaillée", "Detailed view"),
-    ("Vue résumée", "Summary view"),
-)
-
-GLOBAL_UI_TRANSLATIONS = GLOBAL_UI_TRANSLATIONS + (
-    ("Fichiers PNG", "PNG files"),
-    ("Téléverser les icônes GROUP", "Upload GROUP icons"),
-    ("Aucune icône GROUP téléversée.", "No GROUP icon uploaded."),
-    ("Lieu de travail mobile", "Mobile work location"),
-    ("Les présences mobiles des éducatrices sont acceptées dans le rayon de n'importe quel lieu configuré.", "Mobile staff attendance is accepted within the radius of any configured location."),
-    ("LOGO", "LOGO"),
-    ("propriétaire", "owner"),
-    ("administratrice", "principal"),
-    ("cuisine", "kitchen"),
-    ("éducatrice", "educator"),
-    ("Dossier", "Folder"),
-    ("DFF", "DFF"),
-    ("W-T", "W-T"),
-    ("S-T", "S-T"),
-)
-
-GLOBAL_UI_TRANSLATIONS = GLOBAL_UI_TRANSLATIONS + (
-    ("Aucun enfant présent avec allergies enregistrées.", "No present child has recorded allergies."),
-    ("Logo de la garderie", "Childcare logo"),
-    ("PNG, JPG, WEBP ou GIF · 5 Mo max. L'image sera recadrée pour remplir le cercle.", "PNG, JPG, WEBP or GIF · 5 MB max. The image will be cropped to fill the circle."),
-    ("Téléverser le logo", "Upload logo"),
-    ("Heure de CHECK OUT automatique", "Automatic CHECK OUT time"),
-    ("Tous les enfants et employés encore présents seront automatiquement CHECK OUT à cette heure.", "All children and employees still present will be automatically checked out at this time."),
-    ("Enregistrer l'heure", "Save time"),
-    ("Aucun lieu configuré.", "No location configured."),
-    ("Position actuelle", "Current location"),
-    ("Autoriser 5 nouvelles photos", "Allow 5 new photos"),
-    ("Suppression définitive", "Permanent deletion"),
-    ("Action réservée au patron. Ces opérations ne passent pas par l'archive.", "Boss-only action. These operations do not use the archive."),
-    ("Compte utilisateur", "User account"),
-    ("Supprimer définitivement le compte", "Permanently delete account"),
-    ("Historique des connexions", "Connection history"),
-    ("MAC / appareil", "MAC / device"),
-    ("Premier", "First"),
-    ("Dernier", "Last"),
-    ("Expire", "Expires"),
-    ("Aucune connexion.", "No connections."),
-    ("Acteur", "Actor"),
-    ("Adresse IP", "IP Address"),
-    ("Objet", "Object"),
-    ("Compte concepteur", "Designer account"),
-    ("Diagnostics", "Diagnostics"),
-    ("ID", "ID"),
-    ("Comptes", "Accounts"),
-    ("Personnes", "People"),
-    ("Modifiez les présentations en français et en anglais. Les changements apparaîtront sur la page de connexion publique.", "Edit the French and English presentations. Changes will appear on the public login page."),
-    ("Description de la marque — Français", "Brand description — French"),
-    ("Description de la marque — Anglais", "Brand description — English"),
-    ("Texte d’introduction — Français", "Introduction text — French"),
-    ("Texte d’introduction — Anglais", "Introduction text — English"),
-    ("Fonction 1 — Français", "Feature 1 — French"),
-    ("Fonction 1 — Anglais", "Feature 1 — English"),
-    ("Fonction 2 — Français", "Feature 2 — French"),
-    ("Fonction 2 — Anglais", "Feature 2 — English"),
-    ("Fonction 3 — Français", "Feature 3 — French"),
-    ("Fonction 3 — Anglais", "Feature 3 — English"),
-    ("Fonction 4 — Français", "Feature 4 — French"),
-    ("Fonction 4 — Anglais", "Feature 4 — English"),
-    ("Fonction 5 — Français", "Feature 5 — French"),
-    ("Fonction 5 — Anglais", "Feature 5 — English"),
-    ("Prix — Français", "Price — French"),
-    ("Prix — Anglais", "Price — English"),
-    ("Période d’essai gratuit — Français", "Free trial period — French"),
-    ("Période d’essai gratuit — Anglais", "Free trial period — English"),
-    ("Dernier :", "Last:"),
-    ("Le lieu de travail mobile n'est pas encore configuré.", "The mobile work location is not configured yet."),
-    ("Autorisez la caméra et la position du téléphone.", "Allow access to the camera and phone location."),
-    ("La modification n'est pas autorisée pour ce compte.", "Editing is not allowed for this account."),
-    ("Ajouter un avatar", "Add avatar"),
-    ("ALLERGIES ALIMENTAIRES", "FOOD ALLERGIES"),
-    ("Utilisation des dates sélectionnées", "Use of selected dates"),
-    ("IN", "IN"),
-    ("OUT", "OUT"),
-    ("S-IN", "S-IN"),
-    ("S-OUT", "S-OUT"),
-)
-
-def global_language_script():
-    translations_json = json.dumps(GLOBAL_UI_TRANSLATIONS, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
-    template = r'''
-    <script>
-    (function() {
-      const pairs = __TRANSLATIONS__;
-      const lookup = new Map();
-      pairs.forEach(function(pair) {
-        lookup.set(String(pair[0]).trim().toLocaleLowerCase(), pair);
-        lookup.set(String(pair[1]).trim().toLocaleLowerCase(), pair);
-      });
-      let currentLanguage = 'fr';
-      const dynamicPatterns = [
-        [/^Confirmer arrivée de (.+) \?$/i, 'Confirm arrival for $1?', /^Confirm arrival for (.+)\?$/i, 'Confirmer arrivée de $1 ?'],
-        [/^Confirmer départ de (.+) \?$/i, 'Confirm departure for $1?', /^Confirm departure for (.+)\?$/i, 'Confirmer départ de $1 ?'],
-        [/^Confirmer l’enregistrement de (.+) \?$/i, 'Confirm saving $1?', /^Confirm saving (.+)\?$/i, 'Confirmer l’enregistrement de $1 ?'],
-        [/^Supprimer ce groupe de la liste \? (.+)$/i, 'Remove this group from the list? $1', /^Remove this group from the list\? (.+)$/i, 'Supprimer ce groupe de la liste ? $1'],
-        [/^Supprimer cette personne de la liste \? (.+)$/i, 'Remove this person from the list? $1', /^Remove this person from the list\? (.+)$/i, 'Supprimer cette personne de la liste ? $1'],
-        [/^Total utilisateurs : (\d+)$/i, 'Total users: $1', /^Total users: (\d+)$/i, 'Total utilisateurs : $1'],
-        [/^Total des enregistrements : (\d+)$/i, 'Total records: $1', /^Total records: (\d+)$/i, 'Total des enregistrements : $1'],
-        [/^Présent (\d+)$/i, 'Present $1', /^Present (\d+)$/i, 'Présent $1'],
-        [/^Absence (\d+)$/i, 'Absent $1', /^(?:Absent|Absence) (\d+)$/i, 'Absence $1'],
-        [/^Fermé (\d+)$/i, 'Closed $1', /^Closed (\d+)$/i, 'Fermé $1'],
-        [/^(\d+) demain$/i, '$1 tomorrow', /^(\d+) tomorrow$/i, '$1 demain'],
-        [/^Enfant : (.+) · Groupe : (.+) · Début : (.+)$/i, 'Child: $1 · Group: $2 · Start: $3', /^Child: (.+) · (?:Groupe|Group): (.+) · Start: (.+)$/i, 'Enfant : $1 · Groupe : $2 · Début : $3'],
-        [/^(.+) \(enfants\)$/i, '$1 (children)', /^(.+) \(children\)$/i, '$1 (enfants)'],
-        [/^(.+) \(Enfant - (.+)\)$/i, '$1 (Child - $2)', /^(.+) \(Child - (.+)\)$/i, '$1 (Enfant - $2)'],
-        [/^(.+) \(Employé\)$/i, '$1 (Employee)', /^(.+) \(Employee\)$/i, '$1 (Employé)'],
-        [/^Profil - (.+)$/i, 'Profile - $1', /^Profile - (.+)$/i, 'Profil - $1'],
-        [/^(.+) \(propriétaire\)$/i, '$1 (owner)', /^(.+) \(owner\)$/i, '$1 (propriétaire)'],
-        [/^(.+) \(administratrice\)$/i, '$1 (principal)', /^(.+) \(principal\)$/i, '$1 (administratrice)'],
-        [/^(.+) \(cuisine\)$/i, '$1 (kitchen)', /^(.+) \(kitchen\)$/i, '$1 (cuisine)'],
-        [/^(.+) \(éducatrice\)$/i, '$1 (educator)', /^(.+) \(educator\)$/i, '$1 (éducatrice)'],
-        [/^(.+) [·?] propriétaire$/i, '$1 · owner', /^(.+) [·?] owner$/i, '$1 · propriétaire'],
-        [/^(.+) [·?] éducatrice$/i, '$1 · educator', /^(.+) [·?] educator$/i, '$1 · éducatrice'],
-        [/^(.+) [·?] cuisine$/i, '$1 · kitchen', /^(.+) [·?] kitchen$/i, '$1 · cuisine']
-      ];
-      function translated(value) {
-        const source = String(value == null ? '' : value);
-        const match = source.match(/^(\s*)([\s\S]*?)(\s*)$/);
-        const core = match ? match[2] : source;
-        if (!core) return source;
-        const pair = lookup.get(core.trim().toLocaleLowerCase());
-        let result = pair ? String(currentLanguage === 'en' ? pair[1] : pair[0]) : core;
-        if (!pair) {
-          dynamicPatterns.some(function(pattern) {
-            const expression = currentLanguage === 'en' ? pattern[0] : pattern[2];
-            if (!expression.test(core)) return false;
-            result = core.replace(expression, currentLanguage === 'en' ? pattern[1] : pattern[3]);
-            return true;
-          });
-        }
-        return (match ? match[1] : '') + result + (match ? match[3] : '');
-      }
-      function skipNode(node) {
-        const parent = node && node.parentElement;
-        return !parent || Boolean(parent.closest('script,style,noscript,textarea,[data-no-translate],[data-fr][data-en],.brand-name,.mobile-child-name,.agenda-head-value,.agenda-read-value,.agenda-text-readonly,.agenda-communication-readonly'));
-      }
-      function translateRoot(root) {
-        if (!root) return;
-        const element = root.nodeType === Node.ELEMENT_NODE ? root : root.parentElement;
-        if (element) {
-          const bilingual = [];
-          if (element.matches && element.matches('[data-fr][data-en]')) bilingual.push(element);
-          if (element.querySelectorAll) bilingual.push.apply(bilingual, element.querySelectorAll('[data-fr][data-en]'));
-          bilingual.forEach(function(item) {
-            const value = item.getAttribute('data-' + currentLanguage);
-            if (value != null && item.textContent !== value) item.textContent = value;
-          });
-          const bilingualAttributes = [];
-          const bilingualAttributeSelector = '[data-placeholder-fr][data-placeholder-en],[data-aria-fr][data-aria-en]';
-          if (element.matches && element.matches(bilingualAttributeSelector)) bilingualAttributes.push(element);
-          if (element.querySelectorAll) bilingualAttributes.push.apply(bilingualAttributes, element.querySelectorAll(bilingualAttributeSelector));
-          bilingualAttributes.forEach(function(item) {
-            const placeholder = item.getAttribute('data-placeholder-' + currentLanguage);
-            const ariaLabel = item.getAttribute('data-aria-' + currentLanguage);
-            if (placeholder != null) item.setAttribute('placeholder', placeholder);
-            if (ariaLabel != null) item.setAttribute('aria-label', ariaLabel);
-          });
-          const targets = [];
-          if (element.matches && element.matches('[placeholder],[title],[aria-label],[data-wait-message],[data-wait-text]')) targets.push(element);
-          if (element.querySelectorAll) targets.push.apply(targets, element.querySelectorAll('[placeholder],[title],[aria-label],[data-wait-message],[data-wait-text]'));
-          targets.forEach(function(item) {
-            ['placeholder','title','aria-label','data-wait-message','data-wait-text'].forEach(function(attribute) {
-              if (item.hasAttribute(attribute)) item.setAttribute(attribute, translated(item.getAttribute(attribute)));
-            });
-          });
-        }
-        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-        const nodes = [];
-        while (walker.nextNode()) nodes.push(walker.currentNode);
-        nodes.forEach(function(node) {
-          if (skipNode(node)) return;
-          const value = translated(node.nodeValue);
-          if (value !== node.nodeValue) node.nodeValue = value;
-        });
-      }
-      function setLanguage(language, persist) {
-        currentLanguage = language === 'en' ? 'en' : 'fr';
-        document.documentElement.lang = currentLanguage;
-        document.documentElement.setAttribute('data-app-language', currentLanguage);
-        document.querySelectorAll('[data-app-language-choice]').forEach(function(button) {
-          button.setAttribute('aria-pressed', button.getAttribute('data-app-language-choice') === currentLanguage ? 'true' : 'false');
-        });
-        document.querySelectorAll('[data-user-contact-language]').forEach(function(input) { input.value = currentLanguage; });
-        translateRoot(document.body);
-        document.title = translated(document.title);
-        if (persist !== false) {
-          try { window.localStorage.setItem('pititpas-language', currentLanguage); } catch (_error) {}
-          document.cookie = 'pititpas_language=' + currentLanguage + '; Max-Age=31536000; Path=/; SameSite=Lax';
-        }
-        window.dispatchEvent(new CustomEvent('pititpas:languagechange', { detail: { language: currentLanguage } }));
-      }
-      document.addEventListener('click', function(event) {
-        const button = event.target.closest('[data-app-language-choice]');
-        if (!button) return;
-        setLanguage(button.getAttribute('data-app-language-choice'));
-      });
-      let saved = '';
-      try { saved = window.localStorage.getItem('pititpas-language') || ''; } catch (_error) {}
-      if (!saved) {
-        const cookieMatch = document.cookie.match(/(?:^|;\s*)pititpas_language=(fr|en)(?:;|$)/);
-        if (cookieMatch) saved = cookieMatch[1];
-      }
-      setLanguage(saved === 'en' ? 'en' : 'fr', false);
-      // Dynamic DOM observation is intentionally disabled. Some browser/PWA
-      // combinations repeatedly emitted child-list mutations and made the page
-      // unresponsive. Static page content is translated on load and whenever
-      // the user selects FR or EN; scripts may call PititPasLanguage.refresh()
-      // after adding translated interface elements.
-      const nativeConfirm = window.confirm.bind(window);
-      const nativeAlert = window.alert.bind(window);
-      window.confirm = function(message) { return nativeConfirm(translated(message)); };
-      window.alert = function(message) { return nativeAlert(translated(message)); };
-      window.PititPasLanguage = { get: function() { return currentLanguage; }, set: setLanguage, refresh: function() { translateRoot(document.body); } };
-    })();
-    </script>
-    '''
-    return template.replace("__TRANSLATIONS__", translations_json)
-
-
-def authenticated_contact_dialog_html(user):
-    if not user:
-        return ""
-    display_name = html.escape(user["display_name"] or user["username"], quote=True)
-    return f"""
-    <style>
-      .user-contact-overlay {{ position:fixed; inset:0; z-index:3300; display:flex; align-items:center; justify-content:center; padding:20px; background:rgba(15,35,42,.50); backdrop-filter:blur(3px); }}
-      .user-contact-overlay[hidden] {{ display:none; }}
-      .user-contact-dialog {{ width:min(620px,100%); max-height:calc(100vh - 40px); overflow-y:auto; position:relative; padding:27px; border:1px solid #c8dfe5; border-radius:18px; background:#fff; color:#173b3f; box-shadow:0 28px 80px rgba(15,35,42,.30); }}
-      .user-contact-close {{ position:absolute; top:12px; right:12px; width:34px; height:34px; padding:0; border:0; border-radius:50%; background:#eef4f5; color:#36565c; font-size:22px; line-height:1; cursor:pointer; }}
-      .user-contact-dialog h2 {{ margin:0 42px 8px 0; font-size:26px; }}
-      .user-contact-intro {{ margin:0 0 17px; color:#617573; line-height:1.5; }}
-      .user-contact-form {{ display:grid; gap:13px; }}
-      .user-contact-form label {{ display:block; margin-bottom:6px; color:#294e50; font-size:13px; font-weight:800; }}
-      .user-contact-form input, .user-contact-form textarea {{ width:100%; border:1px solid #d4dfdc; border-radius:11px; background:#fff; padding:11px 12px; color:#173b3f; font:inherit; }}
-      .user-contact-form textarea {{ min-height:130px; resize:vertical; }}
-      .user-contact-form input:focus, .user-contact-form textarea:focus {{ outline:0; border-color:#2d8178; box-shadow:0 0 0 4px rgba(45,129,120,.13); }}
-      .user-contact-submit {{ width:auto; min-height:46px; justify-self:start; padding:0 18px; border:0; border-radius:11px; background:#2f80c2; color:#fff; font:inherit; font-weight:900; cursor:pointer; white-space:nowrap; }}
-      .user-contact-honeypot {{ position:absolute !important; left:-10000px !important; width:1px !important; height:1px !important; overflow:hidden !important; }}
-      @media (max-width:640px) {{ .user-contact-overlay {{ padding:12px; align-items:flex-end; }} .user-contact-dialog {{ max-height:calc(100vh - 24px); padding:23px 17px 18px; border-radius:18px 18px 12px 12px; }} .user-contact-dialog h2 {{ font-size:22px; }} }}
-    </style>
-    <div class="user-contact-overlay" id="user-contact-overlay" role="dialog" aria-modal="true" aria-labelledby="user-contact-title" hidden>
-      <div class="user-contact-dialog">
-        <button class="user-contact-close" type="button" data-user-contact-close data-aria-fr="Fermer" data-aria-en="Close" aria-label="Fermer">&times;</button>
-        <h2 id="user-contact-title" data-fr="Contactez-nous" data-en="Contact us">Contactez-nous</h2>
-        <p class="user-contact-intro" data-fr="Décrivez vos besoins. Votre demande sera envoyée au responsable principal." data-en="Tell us what you need. Your request will be sent to the main administrator.">Décrivez vos besoins. Votre demande sera envoyée au responsable principal.</p>
-        <div class="alert info user-contact-state" data-contact-state="sent" data-fr="Votre demande a été envoyée. Nous vous contacterons bientôt." data-en="Your request has been sent. We will contact you soon." hidden>Votre demande a été envoyée. Nous vous contacterons bientôt.</div>
-        <div class="alert error user-contact-state" data-contact-state="required" data-fr="Veuillez remplir votre nom, vos coordonnées et votre demande." data-en="Please enter your name, contact information and requirements." hidden>Veuillez remplir votre nom, vos coordonnées et votre demande.</div>
-        <div class="alert error user-contact-state" data-contact-state="too_long" data-fr="Le contenu est trop long. Veuillez raccourcir votre demande." data-en="The content is too long. Please shorten your request." hidden>Le contenu est trop long. Veuillez raccourcir votre demande.</div>
-        <div class="alert error user-contact-state" data-contact-state="rate" data-fr="Veuillez attendre quelques secondes avant d’envoyer une autre demande." data-en="Please wait a few seconds before sending another request." hidden>Veuillez attendre quelques secondes avant d’envoyer une autre demande.</div>
-        <div class="alert error user-contact-state" data-contact-state="unavailable" data-fr="Le service Contact est temporairement indisponible. Veuillez réessayer plus tard." data-en="Contact is temporarily unavailable. Please try again later." hidden>Le service Contact est temporairement indisponible. Veuillez réessayer plus tard.</div>
-        <form method="post" action="/contact" class="user-contact-form">
-          <input type="hidden" name="language" data-user-contact-language value="fr">
-          <input type="hidden" name="return_to" data-user-contact-return value="/dashboard">
-          <div class="user-contact-honeypot" aria-hidden="true"><label>Website<input name="website" tabindex="-1" autocomplete="off"></label></div>
-          <div><label for="user-contact-name" data-fr="Nom" data-en="Name">Nom</label><input id="user-contact-name" name="name" value="{display_name}" maxlength="120" autocomplete="name" required></div>
-          <div><label for="user-contact-detail" data-fr="E-mail ou téléphone" data-en="Email or phone">E-mail ou téléphone</label><input id="user-contact-detail" name="contact" maxlength="200" autocomplete="email" required></div>
-          <div><label for="user-contact-requirements" data-fr="Vos besoins" data-en="Your requirements">Vos besoins</label><textarea id="user-contact-requirements" name="requirements" maxlength="4000" data-placeholder-fr="Décrivez votre garderie et les fonctions dont vous avez besoin." data-placeholder-en="Describe your childcare centre and the features you need." placeholder="Décrivez votre garderie et les fonctions dont vous avez besoin." required></textarea></div>
-          <button class="user-contact-submit" type="submit" data-fr="Envoyer la demande" data-en="Send request">Envoyer la demande</button>
-        </form>
-      </div>
-    </div>
-    <script>
-    (function() {{
-      const overlay = document.getElementById('user-contact-overlay');
-      if (!overlay) return;
-      const nameInput = document.getElementById('user-contact-name');
-      const languageInput = overlay.querySelector('[data-user-contact-language]');
-      const returnInput = overlay.querySelector('[data-user-contact-return]');
-      function currentLanguage() {{ return window.PititPasLanguage && window.PititPasLanguage.get() === 'en' ? 'en' : 'fr'; }}
-      function openContact(state) {{
-        document.querySelectorAll('.side-drawer.show, .account-popover.show').forEach(function(menu) {{ menu.classList.remove('show'); menu.setAttribute('aria-hidden', 'true'); }});
-        document.querySelectorAll('.floating-overlay.show').forEach(function(item) {{ item.classList.remove('show'); }});
-        overlay.querySelectorAll('[data-contact-state]').forEach(function(item) {{ item.hidden = item.getAttribute('data-contact-state') !== state; }});
-        if (languageInput) languageInput.value = currentLanguage();
-        if (returnInput) returnInput.value = window.location.pathname + window.location.search;
-        overlay.hidden = false;
-        window.setTimeout(function() {{ if (nameInput) nameInput.focus(); }}, 0);
-      }}
-      function closeContact() {{
-        overlay.hidden = true;
-        const url = new URL(window.location.href);
-        if (url.searchParams.has('contact')) {{ url.searchParams.delete('contact'); window.history.replaceState(null, '', url.pathname + url.search + url.hash); }}
-      }}
-      document.querySelectorAll('[data-user-contact-open]').forEach(function(button) {{ button.addEventListener('click', function() {{ openContact(''); }}); }});
-      overlay.querySelectorAll('[data-user-contact-close]').forEach(function(button) {{ button.addEventListener('click', closeContact); }});
-      overlay.addEventListener('click', function(event) {{ if (event.target === overlay) closeContact(); }});
-      document.addEventListener('keydown', function(event) {{ if (event.key === 'Escape' && !overlay.hidden) closeContact(); }});
-      const state = new URLSearchParams(window.location.search).get('contact') || '';
-      if (['sent','required','too_long','rate','unavailable'].includes(state)) openContact(state);
-    }})();
-    </script>
     """
 
 def html_page(title, user, body, flash=None):
@@ -5734,18 +4225,16 @@ def html_page(title, user, body, flash=None):
     child_bottom_nav = ""
     body_classes = []
     if user:
-        if user["role"] != "children":
-            nav_left.append('<a href="/overview">Accueil</a>')
-        nav_left.append('<a href="/dashboard">Enfants</a>')
+        nav_left.append('<a href="/dashboard">Tableau enfants</a>')
         if user["role"] == "children":
             nav_left.append('<a href="/agenda">Agenda</a>')
         else:
             if user["role"] != "cook":
                 nav_left.append('<a href="/agenda">Agenda</a>')
             nav_left.append('<a href="/calendar">Calendrier</a>')
-            nav_left.append('<a href="/allergic-children">Allergiques</a>')
+            nav_left.append('<a href="/allergic-children">Enfants Allergiques</a>')
         if user["role"] in STAFF_MOBILE_ATTENDANCE_ROLES:
-            nav_left.append('<a href="/teacher-attendance">Educatrices</a>')
+            nav_left.append('<a href="/teacher-attendance">Présences éducatrices</a>')
         if user["role"] in {"principal", "boss", "teacher", "cook"}:
             nav_left.append('<a href="/contacts">Contacts</a>')
             nav_left.append('<a href="/reports">Fiche 4 semaines</a>')
@@ -5758,7 +4247,6 @@ def html_page(title, user, body, flash=None):
             nav_left.append('<a href="/mobile-invitations#work-location">Lieu travail mobile</a>')
         if is_main_project_boss(user):
             nav_left.append('<a href="/login-page-content">Page connexion</a>')
-            nav_left.append('<a href="/appearance">Apparence</a>')
         if is_super_admin(user):
             nav_left.append('<a href="/projects">Project</a>')
         if user["role"] != "children":
@@ -5772,17 +4260,12 @@ def html_page(title, user, body, flash=None):
             child_message_class = ' class="child-desktop-only nav-unread"' if unread_message_count(user) > 0 else ' class="child-desktop-only"'
             nav_right.append('<a class="child-desktop-only" href="/files">Fichiers</a>')
             nav_right.append(f'<a{child_message_class} href="/mail">Message</a>')
-        nav_right.append('<button type="button" data-user-contact-open>Assistance</button>')
-        if can_view_instructions(user):
-            nav_right.append('<a href="/instructions">Instructions</a>')
         nav_right.append('<a href="/password-change">Mot de passe</a>')
         if can_view_audit_logs(user):
             nav_right.append('<a href="/audit">Journaux</a>')
         nav_right.append(f'<form method="post" action="/logout" style="display:inline"><button type="submit">Déconnexion</button></form>')
         if user["role"] in STAFF_MOBILE_ATTENDANCE_ROLES and user["role"] != "boss":
             body_classes.append("staff-mobile-nav")
-        if user["role"] in STAFF_MOBILE_ATTENDANCE_ROLES - {"boss", "principal"}:
-            body_classes.append("non-management-staff")
         if user["role"] == "children":
             body_classes.append("child-mobile-nav")
             bottom_message_class = " nav-unread" if unread_message_count(user) > 0 else ""
@@ -5807,39 +4290,20 @@ def html_page(title, user, body, flash=None):
     body_class = f' class="{html.escape(" ".join(body_classes))}"' if body_classes else ""
     header = ""
     if user:
-        brand_name, brand_logo_url = current_project_brand(user)
-        brand_logo_html = f'<img class="brand-logo" src="{html.escape(brand_logo_url, quote=True)}" alt="">' if brand_logo_url else ""
+        brand_name = current_project_name(user)
         presence_text = header_presence_status(user)
-        if presence_text:
-            presence_fr = "Présent" if presence_text == "Present" else "Sorti"
-            presence_en = "Present" if presence_text == "Present" else "Out"
-            presence_html = (
-                f' &middot; <span data-fr="{html.escape(presence_fr, quote=True)}" '
-                f'data-en="{html.escape(presence_en, quote=True)}">{html.escape(presence_fr)}</span>'
-            )
-        else:
-            presence_html = ""
-        role_fr = ROLE_LABELS.get(user["role"], user["role"])
-        role_en = {
-            "teacher": "teacher", "principal": "principal", "boss": "owner",
-            "cook": "cook", "children": "child",
-        }.get(user["role"], user["role"])
-        user_contact_html = authenticated_contact_dialog_html(user)
+        presence_html = f" &middot; {html.escape(presence_text)}" if presence_text else ""
         header = f"""
         <div class="topbar">
           <div class="topbar-main">
-            <div class="brand">{brand_logo_html}<span class="brand-name">{html.escape(brand_name)}</span></div>
+            <div class="brand">{html.escape(brand_name)}</div>
           </div>
           <div class="topbar-menu-row">
             <div class="topbar-left-actions">
               <button class="menu-toggle" type="button" data-menu-open="main-menu" aria-label="Menu">☰</button>
               <button class="back-toggle" type="button" data-back-button aria-label="Retour" title="Retour">←</button>
             </div>
-            <div class="app-language-switch" role="group" aria-label="Langue" data-aria-fr="Langue" data-aria-en="Language">
-              <button type="button" data-app-language-choice="fr" aria-pressed="true">FR</button>
-              <button type="button" data-app-language-choice="en" aria-pressed="false">EN</button>
-            </div>
-            <button class="account-toggle" type="button" data-menu-open="account-menu"><span><span data-no-translate>{html.escape(user['display_name'])}</span> &middot; <span data-fr="{html.escape(role_fr, quote=True)}" data-en="{html.escape(role_en, quote=True)}">{html.escape(role_fr)}</span>{presence_html}</span><span class="menu-mark" aria-hidden="true">☰</span></button>
+            <button class="account-toggle" type="button" data-menu-open="account-menu"><span>{html.escape(user['display_name'])} &middot; {ROLE_LABELS.get(user['role'], user['role'])}{presence_html}</span><span class="menu-mark" aria-hidden="true">☰</span></button>
           </div>
         </div>
         <div class="floating-overlay" data-menu-close></div>
@@ -5853,7 +4317,6 @@ def html_page(title, user, body, flash=None):
             {''.join(nav_right)}
           </div>
         </div>
-        {user_contact_html}
         <script>
         (function() {{
           document.querySelectorAll('[data-back-button]').forEach(function(button) {{
@@ -5864,30 +4327,6 @@ def html_page(title, user, body, flash=None):
               }} catch (_error) {{}}
               if (sameOriginReferrer) window.history.back();
               else window.location.href = '/dashboard';
-            }});
-          }});
-          document.addEventListener('click', function(event) {{
-            if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-            const link = event.target.closest('a[href]');
-            if (!link || link.target || link.hasAttribute('download')) return;
-            let targetUrl;
-            try {{ targetUrl = new URL(link.href, window.location.href); }} catch (_error) {{ return; }}
-            if (targetUrl.origin !== window.location.origin || !['/dashboard', '/teacher-attendance'].includes(targetUrl.pathname)) return;
-            if (targetUrl.href === window.location.href) return;
-            event.preventDefault();
-            closeMenus();
-            const wrap = document.querySelector('.wrap');
-            if (wrap) {{
-              let english = document.documentElement.lang === 'en';
-              try {{ english = window.localStorage.getItem('pititpas-language') === 'en' || english; }} catch (_error) {{}}
-              const isDashboard = targetUrl.pathname === '/dashboard';
-              const heading = isDashboard ? (english ? 'Children dashboard' : 'Tableau enfants') : (english ? 'Staff attendance' : 'Présences éducatrices');
-              const loading = english ? 'Loading data...' : 'Chargement des données...';
-              wrap.innerHTML = '<style>.instant-page-shell{{display:grid;gap:12px}}.instant-page-line{{height:18px;border-radius:9px;background:linear-gradient(90deg,#edf3f7 25%,#dfeaf1 50%,#edf3f7 75%);background-size:200% 100%;animation:instant-page-pulse 1.1s linear infinite}}.instant-page-line.short{{width:42%}}.instant-page-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px}}.instant-page-card{{height:76px;border-radius:12px;background:#f2f7fa}}@keyframes instant-page-pulse{{to{{background-position:-200% 0}}}}@media(max-width:720px){{.instant-page-grid{{grid-template-columns:repeat(2,minmax(0,1fr))}}.instant-page-card{{height:62px}}}}</style><section class="panel instant-page-shell" role="status" aria-live="polite"><h2 style="margin:0">' + heading + '</h2><div class="muted">' + loading + '</div><div class="instant-page-line short"></div><div class="instant-page-grid"><div class="instant-page-card"></div><div class="instant-page-card"></div><div class="instant-page-card"></div><div class="instant-page-card"></div></div><div class="instant-page-line"></div><div class="instant-page-line"></div></section>';
-              window.scrollTo(0, 0);
-            }}
-            window.requestAnimationFrame(function() {{
-              window.requestAnimationFrame(function() {{ window.location.assign(targetUrl.href); }});
             }});
           }});
           if (window.__floatingMenusReady) return;
@@ -5933,8 +4372,7 @@ def html_page(title, user, body, flash=None):
     if flash:
         level, text = flash
         alert_html = f'<div class="alert {html.escape(level)}">{html.escape(text)}</div>'
-    csrf_bootstrap = csrf_fetch_bootstrap(user)
-    page = f"""<!doctype html>
+    return f"""<!doctype html>
     <html lang="en">
     <head>
       <meta charset="utf-8">
@@ -5947,7 +4385,6 @@ def html_page(title, user, body, flash=None):
       <meta name="apple-mobile-web-app-capable" content="yes">
       <meta name="apple-mobile-web-app-title" content="">
       <link rel="apple-touch-icon" href="/app-icon.svg">
-      {csrf_bootstrap}
       {css()}
     </head>
     <body{body_class}>
@@ -5957,7 +4394,6 @@ def html_page(title, user, body, flash=None):
         {body}
       </div>
       {child_bottom_nav}
-      {global_language_script()}
       <div class="wait-overlay" id="wait-overlay" role="status" aria-live="polite" aria-hidden="true">
         <div class="wait-box">
           <div class="wait-spinner" aria-hidden="true"></div>
@@ -6110,41 +4546,6 @@ def html_page(title, user, body, flash=None):
         }}
         refreshMessageBadge();
         window.setInterval(refreshMessageBadge, 60000);
-        const mutationConfirmSkipActions = new Set(['/login', '/logout', '/projects/switch']);
-        function hasOwnConfirmation(form, button) {{
-          const inlineSubmit = form.getAttribute('onsubmit') || '';
-          const inlineClick = button ? (button.getAttribute('onclick') || '') : '';
-          return /confirm\\s*\\(/i.test(inlineSubmit) || /confirm\\s*\\(/i.test(inlineClick) || form.classList.contains('group-hide-form');
-        }}
-        document.addEventListener('submit', function(event) {{
-          if (event.defaultPrevented) return;
-          const form = event.target;
-          if (!(form instanceof HTMLFormElement)) return;
-          const method = ((event.submitter && event.submitter.getAttribute('formmethod')) || form.getAttribute('method') || 'get').toLowerCase();
-          if (method !== 'post' || form.getAttribute('data-confirm-submit') === 'false') return;
-          const button = event.submitter || form.querySelector('button[type="submit"], input[type="submit"]');
-          const rawAction = (button && button.getAttribute('formaction')) || form.getAttribute('action') || window.location.pathname;
-          let actionPath = rawAction;
-          try {{ actionPath = new URL(rawAction, window.location.href).pathname; }} catch (_error) {{}}
-          if (mutationConfirmSkipActions.has(actionPath) || hasOwnConfirmation(form, button)) return;
-          const deleteIntent = Array.from(form.elements || []).some(function(field) {{
-            if (!field || field.disabled) return false;
-            const name = (field.name || '').toLowerCase();
-            const value = (field.value || '').toLowerCase();
-            return (name === 'action' || name === 'operation') && /(delete|remove|supprim|effacer)/i.test(value);
-          }});
-          const actionText = (actionPath + ' ' + (button ? (button.textContent || button.value || '') : '')).toLowerCase();
-          const isDelete = deleteIntent || /(delete|supprim|remove|effacer|permanent-delete)/i.test(actionText);
-          const message = isDelete
-            ? 'Confirmer la suppression ? Cette action sera exécutée après votre confirmation.'
-            : 'Confirmer l’enregistrement de ces modifications ?';
-          if (!window.confirm(message)) {{
-            event.preventDefault();
-            event.stopImmediatePropagation();
-            return;
-          }}
-          hasUnsavedChanges = false;
-        }}, true);
         document.addEventListener('submit', function(event) {{
           if (event.defaultPrevented) return;
           const form = event.target;
@@ -6171,7 +4572,6 @@ def html_page(title, user, body, flash=None):
       </script>
     </body>
     </html>"""
-    return inject_csrf_into_post_forms(page, user)
 
 
 def main_project_owner(conn):
@@ -6209,248 +4609,6 @@ def is_main_project_boss(user, conn=None):
         home_project_id = int(user["project_id"] or 1)
     return home_project_id == 1
 
-
-def can_view_instructions(user):
-    return bool(user and (is_main_project_boss(user) or user_project_id(user) != 1))
-
-
-INSTRUCTION_CONTENT_DEFAULTS = {
-    "intro_main_fr": "Consultez séparément les instructions destinées aux enfants et celles destinées au personnel.",
-    "intro_main_en": "Review the instructions for children and staff separately.",
-    "intro_user_fr": "Cette instruction correspond à votre type de compte.",
-    "intro_user_en": "This guide matches your account type.",
-    "children_badge_fr": "UTILISATEUR ENFANT",
-    "children_badge_en": "CHILD USER",
-    "children_title_fr": "Guide pour l’enfant et sa famille",
-    "children_title_en": "Guide for the child and family",
-    "staff_badge_fr": "UTILISATEUR EMPLOYÉ",
-    "staff_badge_en": "STAFF USER",
-    "staff_title_fr": "Guide pour le personnel",
-    "staff_title_en": "Guide for staff",
-}
-
-INSTRUCTION_STEP_DEFAULTS = {
-    "children": [
-        ("Accès et langue", "Access and language", "Ouvrez le menu à droite pour accéder au profil, aux fichiers, aux messages, au mot de passe, au contact et à cette instruction. Utilisez FR ou EN en haut de la page.", "Open the right menu to access the profile, files, messages, password, contact and this guide. Use FR or EN at the top of the page."),
-        ("Profil", "Profile", "Vérifiez l’avatar, le téléphone, le courriel et les allergies alimentaires. Signalez toute modification importante à la garderie.", "Check the avatar, phone, email and food allergies. Tell the childcare centre about any important change."),
-        ("Agenda", "Agenda", "Consultez les informations quotidiennes publiées par le personnel, notamment les repas, la sieste, les activités et les communications.", "Review the daily information posted by staff, including meals, naps, activities and communications."),
-        ("Fichiers", "Files", "Ouvrez ou enregistrez les documents partagés avec votre compte à partir du menu Fichiers.", "Open or save documents shared with your account from the Files menu."),
-        ("Messages", "Messages", "Utilisez Message pour communiquer avec les destinataires autorisés. Choisissez le destinataire, ajoutez un sujet et joignez un fichier si nécessaire.", "Use Message to communicate with authorized recipients. Choose the recipient, add a subject and attach a file if needed."),
-        ("Sécurité et aide", "Security and help", "Ne partagez pas votre mot de passe. Modifiez-le dans Mot de passe et utilisez Contact dans le menu de droite si vous avez besoin d’aide.", "Do not share your password. Change it under Password and use Contact in the right menu when you need help."),
-    ],
-    "staff": [
-        ("Présence mobile", "Mobile attendance", "Utilisez Présence pour effectuer votre CHECK IN et votre CHECK OUT. Autorisez la position et la caméra lorsque l’application le demande.", "Use Attendance to CHECK IN and CHECK OUT. Allow location and camera access when the application requests them."),
-        ("Tableau enfants", "Children dashboard", "Choisissez le groupe et l’enfant autorisés, vérifiez l’avatar et le statut, puis utilisez uniquement les actions disponibles pour votre rôle.", "Choose an authorized group and child, check the avatar and status, then use only the actions available to your role."),
-        ("Agenda", "Agenda", "Saisissez les repas, la sieste, les activités et les communications avec des informations courtes, exactes et adaptées à chaque enfant.", "Enter meals, naps, activities and communications using short, accurate information appropriate for each child."),
-        ("Allergies et contacts", "Allergies and contacts", "Consultez Enfants Allergiques avant les repas ou activités concernés. Les coordonnées et rapports visibles dépendent de votre rôle.", "Check Allergic Children before relevant meals or activities. Visible contacts and reports depend on your role."),
-        ("Messages et fichiers", "Messages and files", "Utilisez Message et Fichiers uniquement pour les échanges professionnels. Vérifiez le destinataire avant chaque envoi.", "Use Message and Files only for professional exchanges. Check the recipient before every send."),
-        ("Sécurité et gestion", "Security and management", "Ne partagez pas votre compte. Utilisez Mot de passe et Contact dans le menu de droite. Les fonctions Inviter, Account et Dates fermées apparaissent seulement si votre rôle les autorise.", "Do not share your account. Use Password and Contact in the right menu. Invite, Account and Closed Dates appear only when your role allows them."),
-    ],
-}
-
-for _audience, _steps in INSTRUCTION_STEP_DEFAULTS.items():
-    for _index, (_title_fr, _title_en, _text_fr, _text_en) in enumerate(_steps, start=1):
-        INSTRUCTION_CONTENT_DEFAULTS[f"{_audience}_step_{_index}_title_fr"] = _title_fr
-        INSTRUCTION_CONTENT_DEFAULTS[f"{_audience}_step_{_index}_title_en"] = _title_en
-        INSTRUCTION_CONTENT_DEFAULTS[f"{_audience}_step_{_index}_text_fr"] = _text_fr
-        INSTRUCTION_CONTENT_DEFAULTS[f"{_audience}_step_{_index}_text_en"] = _text_en
-
-
-INSTRUCTION_SEQUENCE_BREAK_RE = re.compile(r"[ \t]+(?=\d{1,2}(?:[.)、:：-]|）)[ \t]+)")
-
-
-def format_instruction_sequence_lines(value):
-    normalized = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
-    return INSTRUCTION_SEQUENCE_BREAK_RE.sub("\n", normalized)
-
-
-def normalize_instruction_content_values(values):
-    return {
-        key: format_instruction_sequence_lines(value) if "_text_" in key else str(value or "")
-        for key, value in values.items()
-    }
-
-
-def get_instruction_content(conn=None):
-    owns_connection = conn is None
-    if owns_connection:
-        conn = connect_db()
-    try:
-        row = conn.execute("SELECT content_json FROM instruction_content WHERE id = 1").fetchone()
-        stored = {}
-        if row:
-            try:
-                stored = json.loads(row["content_json"] or "{}")
-            except (TypeError, json.JSONDecodeError):
-                stored = {}
-        content = {
-            key: str(stored.get(key, default) or default)
-            for key, default in INSTRUCTION_CONTENT_DEFAULTS.items()
-        }
-        return normalize_instruction_content_values(content)
-    finally:
-        if owns_connection:
-            conn.close()
-
-
-def instruction_card_html(audience, content):
-    items = []
-    for index in range(1, 7):
-        title_fr = content[f"{audience}_step_{index}_title_fr"]
-        title_en = content[f"{audience}_step_{index}_title_en"]
-        text_fr = content[f"{audience}_step_{index}_text_fr"]
-        text_en = content[f"{audience}_step_{index}_text_en"]
-        items.append(
-            f'<li><strong data-fr="{html.escape(title_fr, quote=True)}" data-en="{html.escape(title_en, quote=True)}">{html.escape(title_fr)}</strong>'
-            f'<p data-fr="{html.escape(text_fr, quote=True)}" data-en="{html.escape(text_en, quote=True)}">{html.escape(text_fr)}</p></li>'
-        )
-    badge_fr = content[f"{audience}_badge_fr"]
-    badge_en = content[f"{audience}_badge_en"]
-    title_fr = content[f"{audience}_title_fr"]
-    title_en = content[f"{audience}_title_en"]
-    return f"""
-      <section class="instruction-card instruction-{audience}">
-        <div class="instruction-badge" data-fr="{html.escape(badge_fr, quote=True)}" data-en="{html.escape(badge_en, quote=True)}">{html.escape(badge_fr)}</div>
-        <h2 data-fr="{html.escape(title_fr, quote=True)}" data-en="{html.escape(title_en, quote=True)}">{html.escape(title_fr)}</h2>
-        <ol>{''.join(items)}</ol>
-      </section>
-    """
-
-
-def instruction_editor_html(content, error=None):
-    intro_fields = "".join(
-        f"""
-        <div class="instruction-edit-row">
-          <div><label>{html.escape(label_fr)} — Français</label><textarea name="{key}_fr" maxlength="1200" required>{html.escape(content[key + '_fr'])}</textarea></div>
-          <div><label>{html.escape(label_en)} — English</label><textarea name="{key}_en" maxlength="1200" required>{html.escape(content[key + '_en'])}</textarea></div>
-        </div>
-        """
-        for key, label_fr, label_en in (
-            ("intro_main", "Introduction du propriétaire principal", "Main owner introduction"),
-            ("intro_user", "Introduction des utilisateurs de sous-projet", "Subproject user introduction"),
-        )
-    )
-    audience_sections = []
-    for audience, section_fr, section_en in (
-        ("children", "Instructions des enfants", "Child instructions"),
-        ("staff", "Instructions du personnel", "Staff instructions"),
-    ):
-        identity_fields = "".join(
-            f"""
-            <div class="instruction-edit-row">
-              <div><label>{label_fr} — Français</label><input name="{audience}_{key}_fr" maxlength="120" required value="{html.escape(content[f'{audience}_{key}_fr'], quote=True)}"></div>
-              <div><label>{label_en} — English</label><input name="{audience}_{key}_en" maxlength="120" required value="{html.escape(content[f'{audience}_{key}_en'], quote=True)}"></div>
-            </div>
-            """
-            for key, label_fr, label_en in (("badge", "Étiquette", "Badge"), ("title", "Titre", "Title"))
-        )
-        step_fields = []
-        for index in range(1, 7):
-            step_fields.append(f"""
-              <fieldset class="instruction-step-editor">
-
-                <div class="instruction-edit-row">
-                  <div><label>Titre — Français</label><input name="{audience}_step_{index}_title_fr" maxlength="120" required value="{html.escape(content[f'{audience}_step_{index}_title_fr'], quote=True)}"></div>
-                  <div><label>Title — English</label><input name="{audience}_step_{index}_title_en" maxlength="120" required value="{html.escape(content[f'{audience}_step_{index}_title_en'], quote=True)}"></div>
-                </div>
-                <div class="instruction-edit-row">
-                  <div><label>TEXTE {index} — Français</label><textarea name="{audience}_step_{index}_text_fr" maxlength="1200" required>{html.escape(content[f'{audience}_step_{index}_text_fr'])}</textarea></div>
-                  <div><label>TEXT {index} — English</label><textarea name="{audience}_step_{index}_text_en" maxlength="1200" required>{html.escape(content[f'{audience}_step_{index}_text_en'])}</textarea></div>
-                </div>
-              </fieldset>
-            """)
-        audience_sections.append(f"""
-          <details class="instruction-edit-section" open>
-            <summary data-fr="{section_fr}" data-en="{section_en}">{section_fr}</summary>
-            <div class="instruction-edit-section-body">{identity_fields}{''.join(step_fields)}</div>
-          </details>
-        """)
-    return f"""
-      <section class="panel instruction-editor">
-        <h2 data-fr="Modifier les instructions" data-en="Edit instructions">Modifier les instructions</h2>
-        <p class="muted" data-fr="Tous les champs français et anglais sont obligatoires. Les modifications enregistrées sont visibles par les utilisateurs des sous-projets." data-en="All French and English fields are required. Saved changes are visible to subproject users.">Tous les champs français et anglais sont obligatoires. Les modifications enregistrées sont visibles par les utilisateurs des sous-projets.</p>
-        {f'<div class="alert error">{html.escape(error)}</div>' if error else ''}
-        <form method="post" action="/instructions/save" class="instruction-edit-form">
-          <details class="instruction-edit-section" open><summary data-fr="Introductions" data-en="Introductions">Introductions</summary><div class="instruction-edit-section-body">{intro_fields}</div></details>
-          {''.join(audience_sections)}
-          <button class="btn primary instruction-save-btn" type="submit" data-fr="Enregistrer les instructions" data-en="Save instructions">Enregistrer les instructions</button>
-        </form>
-        <script>
-        (function() {{
-          const form = document.querySelector('.instruction-edit-form');
-          if (!form) return;
-          const fields = Array.from(form.querySelectorAll('textarea[name*="_text_"]'));
-          function formatField(field) {{ field.value = field.value.replace(/[ \t]+(?=[0-9]{{1,2}}(?:[.)、:：-]|）)[ \t]+)/g, '\n'); }}
-          fields.forEach(function(field) {{ field.addEventListener('blur', function() {{ formatField(field); }}); }});
-          form.addEventListener('submit', function() {{ fields.forEach(formatField); }});
-        }})();
-        </script>
-      </section>
-    """
-
-
-def render_instructions(user, query=None, values=None, error=None):
-    if not can_view_instructions(user):
-        return html_page("Forbidden", user, '<div class="panel">You are not allowed to view these instructions.</div>')
-    query = query or {}
-    with connect_db() as conn:
-        content = get_instruction_content(conn)
-    if values:
-        content.update(normalize_instruction_content_values(values))
-    main_boss = is_main_project_boss(user)
-    if main_boss:
-        viewer_html = ""
-        editor_html = instruction_editor_html(content, error)
-    else:
-        audience = "children" if user["role"] == "children" else "staff"
-        cards = instruction_card_html(audience, content)
-        intro_fr = content["intro_user_fr"]
-        intro_en = content["intro_user_en"]
-        viewer_html = f"""
-        <div class="instruction-head">
-          <h1>INSTRUCTION</h1>
-          <p data-fr="{html.escape(intro_fr, quote=True)}" data-en="{html.escape(intro_en, quote=True)}">{html.escape(intro_fr)}</p>
-        </div>
-        <div class="instruction-layout">{cards}</div>
-        """
-        editor_html = ""
-    saved_html = '<div class="alert info" data-fr="Instructions enregistrées." data-en="Instructions saved.">Instructions enregistrées.</div>' if main_boss and query.get("saved", [""])[0] == "1" else ""
-    body = f"""
-    <style>
-      .instruction-head {{ margin-bottom:14px; }}
-      .instruction-head h1 {{ margin:0 0 5px; font-size:25px; color:#174f75; }}
-      .instruction-head p {{ margin:0; color:var(--muted); }}
-      .instruction-layout {{ display:grid; grid-template-columns:minmax(0,760px); gap:12px; align-items:start; }}
-      .instruction-layout.instruction-two {{ grid-template-columns:repeat(2,minmax(0,1fr)); }}
-      .instruction-card {{ overflow:hidden; border:1px solid #cfe2ef; border-radius:16px; background:#f8fcff; box-shadow:0 8px 22px rgba(30,87,126,.08); }}
-      .instruction-card h2 {{ margin:0; padding:10px 14px 9px; background:#dff1ff; color:#145b8f; font-size:18px; }}
-      .instruction-staff {{ border-color:#cfe7d7; background:#fbfffc; }}
-      .instruction-staff h2 {{ background:#e3f5e8; color:#286a40; }}
-      .instruction-badge {{ display:inline-flex; margin:12px 14px 6px; padding:4px 9px; border-radius:999px; background:#edf6fc; color:#326b91; font-size:10px; font-weight:850; letter-spacing:.04em; }}
-      .instruction-staff .instruction-badge {{ background:#edf8f0; color:#34714a; }}
-      .instruction-card ol {{ margin:0; padding:10px 15px 13px 39px; }}
-      .instruction-card li {{ padding:7px 2px 7px 3px; border-bottom:1px solid rgba(88,130,155,.14); }}
-      .instruction-card li:last-child {{ border-bottom:0; }}
-      .instruction-card strong {{ color:#234d67; font-size:13px; }}
-      .instruction-card p {{ margin:2px 0 0; color:#506777; font-size:12px; line-height:1.35; white-space:pre-line; }}
-      .instruction-editor {{ margin-top:0; }}
-      .instruction-edit-form {{ display:grid; gap:10px; margin-top:12px; }}
-      .instruction-edit-section {{ overflow:hidden; border:1px solid var(--line); border-radius:10px; background:#fbfdff; }}
-      .instruction-edit-section > summary {{ padding:10px 12px; background:#edf6fc; color:#245d85; font-weight:800; cursor:pointer; }}
-      .instruction-edit-section-body {{ display:grid; gap:10px; padding:11px; }}
-      .instruction-edit-row {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }}
-      .instruction-edit-row textarea {{ min-height:72px; resize:vertical; }}
-      .instruction-step-editor {{ margin:0; padding:9px; border:1px solid #dbe6ee; border-radius:8px; }}
-      .instruction-step-editor legend {{ padding:0 6px; color:#3c647f; font-size:12px; font-weight:800; }}
-      .instruction-save-btn {{ width:auto; justify-self:end; white-space:nowrap; }}
-      @media (max-width:820px) {{ .instruction-layout.instruction-two, .instruction-edit-row {{ grid-template-columns:1fr; }} }}
-      @media (max-width:520px) {{ .instruction-head h1 {{ font-size:21px; }} .instruction-card h2 {{ font-size:16px; padding:8px 11px; }} .instruction-badge {{ margin:9px 11px 4px; }} .instruction-card ol {{ padding:7px 10px 9px 32px; }} .instruction-card li {{ padding:5px 1px; }} .instruction-card p {{ font-size:11px; line-height:1.28; }} .instruction-edit-section-body {{ padding:8px; }} .instruction-save-btn {{ justify-self:start; }} }}
-    </style>
-    {saved_html}
-    {viewer_html}
-    {editor_html}
-    """
-    return html_page("INSTRUCTION", user, body)
 
 def get_login_page_text(conn=None):
     owns_connection = conn is None
@@ -6522,92 +4680,6 @@ def render_login_page_content_editor(user, query=None, values=None, error=None):
     return html_page("Page connexion", user, body, flash=flash)
 
 
-def render_appearance_settings(user, query=None, error=None):
-    query = query or {}
-    with connect_db() as conn:
-        if not is_main_project_boss(user, conn):
-            return html_page("Forbidden", user, '<div class="panel">Only the main-project boss can change the page background.</div>')
-    opacity = app_background_opacity_percent()
-    text_opacity = text_window_opacity_percent()
-    flash = ("info", "Appearance settings saved successfully.") if query.get("saved", [""])[0] == "1" else None
-    body = f"""
-    <style>
-      .appearance-form {{ display:grid; gap:16px; max-width:680px; }}
-      .appearance-preview {{ min-height:240px; display:grid; place-items:center; padding:24px; border:1px solid var(--line); border-radius:14px; background-image:linear-gradient(rgba(223,234,241,var(--appearance-overlay)) 0,rgba(238,244,247,var(--appearance-overlay)) 100%),url('/app-background.png'); background-position:center; background-size:cover; box-shadow:inset 0 0 0 1px rgba(255,255,255,.35); }}
-      .appearance-preview-window {{ width:min(420px,100%); padding:18px; border:1px solid rgba(215,226,234,.85); border-radius:12px; background:rgba(255,255,255,var(--appearance-text-opacity)); backdrop-filter:blur(2px); -webkit-backdrop-filter:blur(2px); }}
-      .appearance-preview-window strong {{ display:block; margin-bottom:6px; }}
-      .appearance-opacity-row {{ display:grid; grid-template-columns:minmax(220px,1fr) 96px; gap:12px; align-items:center; }}
-      .appearance-opacity-row input[type="range"] {{ width:100%; }}
-      @media (max-width:560px) {{ .appearance-opacity-row {{ grid-template-columns:1fr 84px; }} .appearance-preview {{ min-height:180px; }} }}
-    </style>
-    <div class="panel">
-      <h2 data-fr="Apparence" data-en="Appearance">Apparence</h2>
-      <div class="muted" style="margin-bottom:16px" data-fr="Réglez l’image de fond et la couleur de fond des fenêtres de texte pour toutes les pages." data-en="Adjust the background image and the text-window background for every page.">Réglez l’image de fond et la couleur de fond des fenêtres de texte pour toutes les pages.</div>
-      {f'<div class="alert error">{html.escape(error)}</div>' if error else ''}
-      <form method="post" action="/appearance" class="appearance-form" data-appearance-form>
-        <div class="appearance-preview" data-appearance-preview style="--appearance-overlay:{1.0 - opacity / 100.0:.2f};--appearance-text-opacity:{text_opacity / 100.0:.2f}" aria-label="Appearance preview">
-          <div class="appearance-preview-window">
-            <strong data-fr="Aperçu de la fenêtre de texte" data-en="Text-window preview">Aperçu de la fenêtre de texte</strong>
-            <span data-fr="Le texte reste visible pendant que vous réglez la transparence du fond." data-en="The text stays visible while you adjust the background transparency.">Le texte reste visible pendant que vous réglez la transparence du fond.</span>
-          </div>
-        </div>
-        <div>
-          <label for="background-opacity" data-fr="Opacité de l’image de fond" data-en="Background image opacity">Opacité de l’image de fond</label>
-          <div class="appearance-opacity-row">
-            <input id="background-opacity" type="range" min="0" max="100" step="1" value="{opacity}" data-opacity-range>
-            <input type="number" name="opacity" min="0" max="100" step="1" value="{opacity}" required data-opacity-number aria-label="Background opacity percentage">
-          </div>
-        </div>
-        <div>
-          <label for="text-window-opacity" data-fr="Opacité du fond des fenêtres de texte" data-en="Text-window background opacity">Opacité du fond des fenêtres de texte</label>
-          <div class="appearance-opacity-row">
-            <input id="text-window-opacity" type="range" min="0" max="100" step="1" value="{text_opacity}" data-text-opacity-range>
-            <input type="number" name="text_window_opacity" min="0" max="100" step="1" value="{text_opacity}" required data-text-opacity-number aria-label="Text-window background opacity percentage">
-          </div>
-          <div class="muted small" data-fr="0 % rend le fond transparent; 100 % le rend complètement opaque." data-en="0% makes the background transparent; 100% makes it fully opaque.">0 % rend le fond transparent; 100 % le rend complètement opaque.</div>
-        </div>
-        <div><button class="btn primary" type="submit" data-fr="Enregistrer" data-en="Save">Enregistrer</button></div>
-      </form>
-    </div>
-    <script>
-    (function() {{
-      const range = document.querySelector('[data-opacity-range]');
-      const number = document.querySelector('[data-opacity-number]');
-      const preview = document.querySelector('[data-appearance-preview]');
-      const textRange = document.querySelector('[data-text-opacity-range]');
-      const textNumber = document.querySelector('[data-text-opacity-number]');
-      if (!range || !number || !textRange || !textNumber || !preview) return;
-      function applyBackground(value) {{
-        const opacity = Math.max(0, Math.min(100, Number(value) || 0));
-        range.value = String(opacity);
-        number.value = String(opacity);
-        const overlay = (1 - opacity / 100).toFixed(2);
-        preview.style.setProperty('--appearance-overlay', overlay);
-        document.documentElement.style.setProperty('--app-background-overlay', overlay);
-      }}
-      function applyTextWindow(value) {{
-        const opacity = Math.max(0, Math.min(100, Number(value) || 0));
-        textRange.value = String(opacity);
-        textNumber.value = String(opacity);
-        const alpha = opacity / 100;
-        preview.style.setProperty('--appearance-text-opacity', alpha.toFixed(2));
-        document.documentElement.style.setProperty('--text-window-opacity', alpha.toFixed(2));
-        document.documentElement.style.setProperty('--text-surface-opacity', Math.min(1, alpha * 62 / 72).toFixed(2));
-        document.documentElement.style.setProperty('--text-card-opacity', Math.min(1, alpha * 68 / 72).toFixed(2));
-        document.documentElement.style.setProperty('--text-input-opacity', Math.min(1, alpha * 82 / 72).toFixed(2));
-        document.documentElement.style.setProperty('--text-cell-opacity', Math.min(1, alpha * 16 / 72).toFixed(2));
-        document.documentElement.style.setProperty('--text-login-opacity', Math.min(1, alpha * 76 / 72).toFixed(2));
-      }}
-      range.addEventListener('input', function() {{ applyBackground(range.value); }});
-      number.addEventListener('input', function() {{ applyBackground(number.value); }});
-      textRange.addEventListener('input', function() {{ applyTextWindow(textRange.value); }});
-      textNumber.addEventListener('input', function() {{ applyTextWindow(textNumber.value); }});
-    }})();
-    </script>
-    """
-    return html_page("Apparence", user, body, flash=flash)
-
-
 def login_page(error=None, show_project_register=True, contact_sent=False, contact_error=None, contact_values=None):
     login_text = get_login_page_text()
     project_register_html = (
@@ -6647,11 +4719,11 @@ def login_page(error=None, show_project_register=True, contact_sent=False, conta
     contact_should_open_js = "true" if contact_sent or contact_error else "false"
     body = f"""
     <style>
-      .login-home-shell {{ min-height:calc(100vh - 40px); margin:-20px; padding:clamp(18px,3vw,48px); overflow:hidden; position:relative; display:grid; place-items:center; background:rgba(247,244,237,.18); color:#173b3f; }}
+      .login-home-shell {{ min-height:calc(100vh - 40px); margin:-20px; padding:clamp(18px,3vw,48px); overflow:hidden; position:relative; display:grid; place-items:center; background:#f7f4ed; color:#173b3f; }}
       .login-home-shell::before, .login-home-shell::after {{ content:""; position:absolute; border-radius:999px; pointer-events:none; }}
       .login-home-shell::before {{ width:520px; height:520px; left:-230px; top:-250px; background:rgba(255,190,92,.24); }}
       .login-home-shell::after {{ width:460px; height:460px; right:-210px; bottom:-260px; background:rgba(77,170,151,.20); }}
-      .login-home {{ width:min(1220px,100%); min-height:min(760px,calc(100vh - 72px)); position:relative; z-index:1; display:grid; grid-template-columns:minmax(0,1.08fr) minmax(360px,.82fr); overflow:hidden; border:1px solid rgba(23,59,63,.10); border-radius:32px; background:rgba(255,255,255,var(--text-login-opacity)); backdrop-filter:blur(2px); -webkit-backdrop-filter:blur(2px); box-shadow:0 32px 90px rgba(31,67,65,.16); }}
+      .login-home {{ width:min(1220px,100%); min-height:min(760px,calc(100vh - 72px)); position:relative; z-index:1; display:grid; grid-template-columns:minmax(0,1.08fr) minmax(360px,.82fr); overflow:hidden; border:1px solid rgba(23,59,63,.10); border-radius:32px; background:#fff; box-shadow:0 32px 90px rgba(31,67,65,.16); }}
       .login-story {{ position:relative; overflow:hidden; padding:clamp(34px,5vw,76px); display:flex; flex-direction:column; justify-content:space-between; gap:42px; background:linear-gradient(145deg,#194e54 0%,#1f6867 56%,#2f8175 100%); color:#fff; }}
       .login-story::before {{ content:""; position:absolute; width:420px; height:420px; right:-220px; top:-150px; border:70px solid rgba(255,255,255,.07); border-radius:50%; }}
       .login-story::after {{ content:""; position:absolute; width:190px; height:190px; left:-70px; bottom:-75px; border-radius:46% 54% 58% 42%; background:#f3b34e; opacity:.94; transform:rotate(24deg); }}
@@ -6665,7 +4737,6 @@ def login_page(error=None, show_project_register=True, contact_sent=False, conta
       .login-benefit-list {{ max-width:620px; display:grid; gap:9px; margin-top:22px; }}
       .login-benefit-item {{ display:grid; grid-template-columns:24px minmax(0,1fr); gap:10px; align-items:start; padding:10px 12px; border:1px solid rgba(255,255,255,.16); border-radius:13px; background:rgba(255,255,255,.08); color:#eef9f6; font-size:clamp(13px,1.15vw,15px); line-height:1.42; }}
       .login-benefit-mark {{ display:grid; width:20px; height:20px; place-items:center; margin-top:1px; border-radius:50%; background:rgba(246,189,97,.18); color:#ffd892; font-size:12px; font-weight:900; }}
-      .login-story-price {{ max-width:620px; margin-top:15px; color:#ffe1ad; font-size:14px; font-weight:700; letter-spacing:.01em; }}
       .login-product-preview {{ width:min(470px,100%); margin-left:auto; padding:17px; border:1px solid rgba(255,255,255,.20); border-radius:20px; background:rgba(255,255,255,.12); backdrop-filter:blur(7px); box-shadow:0 18px 38px rgba(5,35,38,.18); }}
       .login-preview-head {{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; font-size:12px; font-weight:800; }}
       .login-live {{ display:inline-flex; align-items:center; gap:6px; color:#e5f5f0; }}
@@ -6674,7 +4745,7 @@ def login_page(error=None, show_project_register=True, contact_sent=False, conta
       .login-preview-stat {{ padding:13px 10px; border-radius:14px; background:rgba(255,255,255,.94); color:#173b3f; }}
       .login-preview-stat strong {{ display:block; font-size:25px; line-height:1; }}
       .login-preview-stat small {{ display:block; margin-top:6px; color:#637b7b; font-size:10px; font-weight:800; text-transform:uppercase; }}
-      .login-access {{ position:relative; padding:clamp(28px,5vw,74px); display:flex; align-items:center; justify-content:center; background:rgba(255,253,249,var(--text-login-opacity)); }}
+      .login-access {{ position:relative; padding:clamp(28px,5vw,74px); display:flex; align-items:center; justify-content:center; background:#fffdf9; }}
       .login-desktop-register {{ margin-top:14px; display:flex; align-items:center; justify-content:center; gap:8px; color:#728280; font-size:10px; font-weight:800; letter-spacing:.035em; text-align:center; }}
       .login-desktop-register a {{ color:#2f80c2; font-size:11px; font-weight:900; letter-spacing:.055em; white-space:nowrap; }}
       .login-card {{ width:min(430px,100%); }}
@@ -6697,7 +4768,8 @@ def login_page(error=None, show_project_register=True, contact_sent=False, conta
       .login-register {{ margin-top:25px; padding-top:20px; border-top:1px solid #e4ebe8; color:#728280; text-align:center; font-size:13px; }}
       .login-register a, .login-form-meta a {{ color:#246e68; font-weight:900; }}
       .login-commercial {{ display:grid; gap:7px; justify-items:center; margin-top:13px; color:#617573; text-align:center; font-size:12px; }}
-      .login-contact-open {{ padding:0; border:0; background:transparent; color:#2f80c2; font:inherit; font-size:15px; font-weight:900; text-decoration:underline; text-transform:uppercase; cursor:pointer; }}
+      .login-price {{ font-weight:850; color:#2f6f69; }}
+      .login-contact-open {{ padding:0; border:0; background:transparent; color:#2f80c2; font:inherit; font-weight:900; text-decoration:underline; cursor:pointer; }}
       .login-contact-overlay {{ position:fixed; inset:0; z-index:3200; display:flex; align-items:center; justify-content:center; padding:20px; background:rgba(15,35,42,.50); backdrop-filter:blur(3px); }}
       .login-contact-overlay[hidden] {{ display:none; }}
       .login-contact-dialog {{ width:min(620px,100%); max-height:calc(100vh - 40px); overflow-y:auto; position:relative; padding:27px; border:1px solid #c8dfe5; border-radius:18px; background:#fff; color:#173b3f; box-shadow:0 28px 80px rgba(15,35,42,.30); }}
@@ -6733,7 +4805,6 @@ def login_page(error=None, show_project_register=True, contact_sent=False, conta
               <div class="login-benefit-item"><span class="login-benefit-mark">✓</span><span data-fr="{html.escape(login_text['benefit_4_fr'], quote=True)}" data-en="{html.escape(login_text['benefit_4_en'], quote=True)}">{html.escape(login_text['benefit_4_fr'])}</span></div>
               <div class="login-benefit-item"><span class="login-benefit-mark">✓</span><span data-fr="{html.escape(login_text['benefit_5_fr'], quote=True)}" data-en="{html.escape(login_text['benefit_5_en'], quote=True)}">{html.escape(login_text['benefit_5_fr'])}</span></div>
             </div>
-            <div class="login-story-price" data-fr="{html.escape(login_text['price_fr'] + ' · ' + login_text['trial_fr'], quote=True)}" data-en="{html.escape(login_text['price_en'] + ' · ' + login_text['trial_en'], quote=True)}">{html.escape(login_text['price_fr'] + ' · ' + login_text['trial_fr'])}</div>
           </div>
           <div class="login-product-preview" aria-label="Aperçu des présences">
             <div class="login-preview-head"><span data-fr="Aujourd&#39;hui" data-en="Today">Aujourd&#39;hui</span><span class="login-live" data-fr="Mise à jour en direct" data-en="Live update">Mise à jour en direct</span></div>
@@ -6753,6 +4824,7 @@ def login_page(error=None, show_project_register=True, contact_sent=False, conta
             {desktop_project_register_html}
             {project_register_html}
             <div class="login-commercial">
+              <div class="login-price" data-fr="{html.escape(login_text['price_fr'] + ' · ' + login_text['trial_fr'], quote=True)}" data-en="{html.escape(login_text['price_en'] + ' · ' + login_text['trial_en'], quote=True)}">{html.escape(login_text['price_fr'] + ' · ' + login_text['trial_fr'])}</div>
               <button class="login-contact-open" type="button" data-contact-open data-fr="Contact" data-en="Contact">Contact</button>
             </div>
             <div class="login-trust"><span data-fr="Support bilingue" data-en="Bilingual support">Support bilingue</span><span data-fr="Accès sur mobile" data-en="Mobile access">Accès sur mobile</span><span data-fr="Données protégées" data-en="Protected data">Données protégées</span><a href="/privacy" data-fr="Politique de confidentialité" data-en="Privacy policy">Politique de confidentialité</a></div>
@@ -6859,7 +4931,8 @@ def login_page(error=None, show_project_register=True, contact_sent=False, conta
     return html_page("Connexion", None, body)
 
 def render_privacy_policy():
-    contact_name, contact_email = configured_privacy_contact()
+    contact_name = os.environ.get(PRIVACY_CONTACT_ENV, "").strip()
+    contact_email = os.environ.get(PRIVACY_EMAIL_ENV, "").strip()
     contact_name_html = html.escape(contact_name or "À configurer / To be configured")
     if contact_email:
         contact_email_html = f'<a href="mailto:{html.escape(contact_email, quote=True)}">{html.escape(contact_email)}</a>'
@@ -7644,28 +5717,34 @@ def password_is_expired(user):
     return local_now() >= due
 
 
+def recent_teacher_event_block(conn, person_id, event_type):
+    row = conn.execute(
+        """
+        SELECT timestamp
+        FROM attendance
+        WHERE person_id = ? AND role = 'teachers'
+        ORDER BY timestamp DESC, id DESC
+        LIMIT 1
+        """,
+        (person_id,),
+    ).fetchone()
+    if not row:
+        return False
+    try:
+        last = datetime.strptime(row["timestamp"], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return False
+    return (local_now() - last).total_seconds() < 30 * 60
+
+
 def record_attendance(conn, actor, person_id, event_type, source="web", request_handler=None, snapshot_path=None):
     person = conn.execute("SELECT id, name, role, project_id FROM persons WHERE id = ?", (person_id,)).fetchone()
     if not person:
         raise ValueError("Child or teacher not found")
     if actor and int(person["project_id"] or 1) != effective_project_id(conn, actor):
         raise ValueError("Person is not in this project")
-    if person["role"] == "teachers":
-        latest = conn.execute(
-            """
-            SELECT event_type
-            FROM attendance
-            WHERE person_id = ? AND role = 'teachers'
-            ORDER BY timestamp DESC, id DESC
-            LIMIT 1
-            """,
-            (person["id"],),
-        ).fetchone()
-        currently_in = bool(latest and latest["event_type"] == "checkin")
-        if event_type == "checkin" and currently_in:
-            raise ValueError("This employee is already present; check-out is required")
-        if event_type == "checkout" and not currently_in:
-            raise ValueError("This employee is already out; check-in is required")
+    if person["role"] == "teachers" and recent_teacher_event_block(conn, person_id, event_type):
+        raise ValueError("Teacher attendance changes are locked for 30 minutes after the last record")
     timestamp = now_text()
     try:
         conn.execute(
@@ -7824,7 +5903,10 @@ def attendance_by_day(conn, person_id, start_day, days=28):
             status = "F"
         else:
             events = get_attendance_rows(conn, person_id, day_text)
-            status = "P" if any(event["event_type"] == "checkin" for event in events) else "A"
+            if not events:
+                status = "A"
+            else:
+                status = "P" if events[-1]["event_type"] == "checkin" else "A"
         rows.append((day_text, status))
         current += timedelta(days=1)
     return rows
@@ -7837,32 +5919,20 @@ def fiche_summary(conn, person_id, start_day):
 
 
 def render_fiche_calendar(weeks):
-    day_names = [("Lun", "Mon"), ("Mar", "Tue"), ("Mer", "Wed"), ("Jeu", "Thu"), ("Ven", "Fri"), ("Sam", "Sat"), ("Dim", "Sun")]
-    month_names = [
-        ("Jan", "Jan"), ("Fév", "Feb"), ("Mars", "Mar"), ("Avr", "Apr"),
-        ("Mai", "May"), ("Juin", "Jun"), ("Juil", "Jul"), ("Août", "Aug"),
-        ("Sept", "Sep"), ("Oct", "Oct"), ("Nov", "Nov"), ("Déc", "Dec"),
-    ]
+    day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
     week_blocks = []
     total_counts = {"P": 0, "A": 0, "F": 0}
     for week_index, week in enumerate(weeks, start=1):
         counts = {"P": 0, "A": 0, "F": 0}
         day_cards = []
-        for day_index, (day_text, status) in enumerate(week[:5]):
+        for day_index, (day_text, status) in enumerate(week):
             dt = datetime.strptime(day_text, "%Y-%m-%d").date()
             counts[status] += 1
             total_counts[status] += 1
-            day_fr, day_en = day_names[day_index]
-            month_fr, month_en = month_names[dt.month - 1]
-            day_name_html = (
-                f'<div class="fiche-day-name" data-fr="{day_fr}" data-en="{day_en}">{day_fr}</div>'
-                if week_index == 1 else ""
-            )
-            day_name_class = " with-day-name" if week_index == 1 else ""
             day_cards.append(f"""
-              <div class="fiche-day {status}{day_name_class}">
-                {day_name_html}
-                <div><span class="fiche-day-date">{dt.day}</span> <span class="fiche-day-month" data-fr="{month_fr}" data-en="{month_en}">{month_fr}</span></div>
+              <div class="fiche-day {status}">
+                <div class="fiche-day-name">{day_names[day_index]}</div>
+                <div><span class="fiche-day-date">{dt.day}</span> <span class="fiche-day-month">{dt.strftime('%b')}</span></div>
                 <span class="pill {status}">{status}</span>
               </div>
             """)
@@ -7877,7 +5947,7 @@ def render_fiche_calendar(weeks):
         """)
     legend = f"""
       <div class="fiche-legend">
-        <span>Toute :</span>
+        <span>Toute:</span>
         <span><span class="pill P">P</span> Present {total_counts['P']}</span>
         <span><span class="pill A">A</span> Absence {total_counts['A']}</span>
         <span><span class="pill F">F</span> Closed {total_counts['F']}</span>
@@ -7885,138 +5955,6 @@ def render_fiche_calendar(weeks):
     """
     return f"<div class=\"fiche-calendar\">{''.join(week_blocks)}</div>{legend}"
 
-
-def currently_present_person_ids(conn, person_ids, day_text):
-    normalized_ids = sorted({int(person_id) for person_id in person_ids if person_id is not None})
-    if not normalized_ids:
-        return set()
-    placeholders = ",".join("?" for _ in normalized_ids)
-    rows = conn.execute(
-        f"""
-        SELECT attendance.person_id, attendance.event_type
-        FROM attendance
-        WHERE attendance.person_id IN ({placeholders})
-          AND attendance.timestamp LIKE ?
-          AND NOT EXISTS (
-              SELECT 1
-              FROM attendance AS newer
-              WHERE newer.person_id = attendance.person_id
-                AND newer.timestamp LIKE ?
-                AND (
-                    newer.timestamp > attendance.timestamp
-                    OR (newer.timestamp = attendance.timestamp AND newer.id > attendance.id)
-                )
-          )
-        """,
-        tuple(normalized_ids) + (f"{day_text}%", f"{day_text}%"),
-    ).fetchall()
-    return {int(row["person_id"]) for row in rows if row["event_type"] == "checkin"}
-
-
-def render_presence_overview(user):
-    if user["role"] == "children":
-        return html_page("Forbidden", user, '<div class="panel">This page is for staff accounts only.</div>')
-    with connect_db() as conn:
-        project_id = effective_project_id(conn, user)
-        project = current_project(conn, user)
-        child_rows = conn.execute(
-            """
-            SELECT persons.id, persons.class_name
-            FROM persons
-            WHERE persons.role = 'children'
-              AND persons.project_id = ?
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM deleted_user_archives
-                  WHERE deleted_user_archives.person_id = persons.id
-                    AND deleted_user_archives.project_id = persons.project_id
-              )
-            ORDER BY persons.id
-            """,
-            (project_id,),
-        ).fetchall()
-        staff_rows = conn.execute(
-            """
-            SELECT web_users.id, persons.id AS person_id
-            FROM web_users
-            LEFT JOIN persons
-              ON persons.id = web_users.person_id
-             AND persons.project_id = web_users.project_id
-             AND persons.role = 'teachers'
-            WHERE web_users.project_id = ?
-              AND web_users.is_active = 1
-              AND web_users.role <> 'children'
-            ORDER BY web_users.id
-            """,
-            (project_id,),
-        ).fetchall()
-        child_ids = [
-            int(row["id"])
-            for row in child_rows
-            if not is_test_group_name(row["class_name"])
-        ]
-        staff_person_ids = [int(row["person_id"]) for row in staff_rows if row["person_id"] is not None]
-        day_text = today_text()
-        children_present = len(currently_present_person_ids(conn, child_ids, day_text))
-        staff_present = len(currently_present_person_ids(conn, staff_person_ids, day_text))
-        children_total = len(child_ids)
-        staff_total = len(staff_rows)
-        project_name = (project["name"] if project else "") or "PITIT PAS"
-
-    body = f"""
-    <style>
-      .presence-home {{ position:relative; min-height:calc(100vh - 150px); display:grid; align-content:center; gap:28px; padding:clamp(10px,2vw,24px); }}
-      .presence-home-head {{ max-width:720px; margin:0 auto; text-align:center; }}
-      .presence-home-kicker {{ color:var(--blue); font-size:12px; font-weight:900; letter-spacing:.12em; text-transform:uppercase; }}
-      .presence-home-head h1 {{ margin:8px 0 6px; color:#183247; font-size:clamp(24px,3vw,38px); line-height:1.08; letter-spacing:-.03em; }}
-      .presence-home-date {{ color:var(--muted); font-weight:650; }}
-      .presence-counts {{ width:min(620px,100%); margin:0 auto; display:grid; grid-template-columns:1fr; gap:16px; }}
-      .presence-count-card {{ display:grid; grid-template-columns:max-content auto; justify-content:center; align-items:center; gap:18px; padding:18px 22px; border:1px solid var(--line); border-radius:18px; background:rgba(255,255,255,var(--text-card-opacity)); box-shadow:0 8px 24px rgba(19,44,61,.06); }}
-      .presence-count-circle {{ grid-column:2; grid-row:1; justify-self:end; width:clamp(132px,14vw,176px); aspect-ratio:1; display:grid; place-items:center; border-radius:50%; border:8px solid #dbeaf3; background:linear-gradient(145deg,#fff,#f2f7fa); box-shadow:inset 0 0 0 1px rgba(39,117,169,.08),0 9px 24px rgba(25,79,111,.10); }}
-      .presence-count-card.staff .presence-count-circle {{ border-color:#d9eee4; background:linear-gradient(145deg,#fff,#f1f8f4); }}
-      .presence-count-value {{ color:#174c6d; font-size:clamp(30px,4vw,46px); font-weight:900; line-height:1; letter-spacing:-.055em; font-variant-numeric:tabular-nums; }}
-      .presence-count-card.staff .presence-count-value {{ color:#176541; }}
-      .presence-count-copy {{ grid-column:1; grid-row:1; min-width:0; }}
-      .presence-count-label {{ color:#263d4d; font-size:18px; font-weight:850; }}
-      .presence-count-help {{ margin-top:5px; color:var(--muted); font-size:12px; text-align:left; }}
-      .my-checkin {{ position:absolute; top:0; right:0; width:clamp(90px,10vw,116px); aspect-ratio:1; display:grid; place-items:center; padding:12px; border-radius:50%; border:4px solid #fff; background:#ef8f35; color:#173b3f; font-size:clamp(14px,1.4vw,17px); font-weight:950; line-height:1.2; text-align:center; text-decoration:none; box-shadow:0 0 0 0 rgba(239,143,53,.55),0 12px 26px rgba(165,86,19,.20); animation:my-checkin-pulse 1.65s ease-out infinite; }}
-      .my-checkin:hover {{ color:#173b3f; text-decoration:none; transform:translateY(-2px); }}
-      @keyframes my-checkin-pulse {{ 0% {{ box-shadow:0 0 0 0 rgba(239,143,53,.58),0 12px 26px rgba(165,86,19,.20); }} 70% {{ box-shadow:0 0 0 16px rgba(239,143,53,0),0 12px 26px rgba(165,86,19,.20); }} 100% {{ box-shadow:0 0 0 0 rgba(239,143,53,0),0 12px 26px rgba(165,86,19,.20); }} }}
-      @media (prefers-reduced-motion:reduce) {{ .my-checkin {{ animation:none; }} }}
-      @media (max-width:720px) {{
-        .presence-home {{ min-height:calc(100vh - 120px); align-content:start; padding:90px 2px 20px; gap:20px; }}
-        .presence-home-kicker, .presence-home-head h1 {{ display:none; }}
-        .my-checkin {{ top:0; right:4px; width:82px; font-size:13px; }}
-        .presence-counts {{ width:100%; margin:0 auto; gap:12px; }}
-        .presence-count-card {{ grid-template-columns:max-content auto; justify-content:center; gap:12px; padding:14px 16px; border-radius:16px; }}
-        .presence-count-circle {{ width:112px; border-width:6px; }}
-        .presence-count-value {{ font-size:30px; }}
-        .presence-count-copy {{ min-width:0; }}
-        .presence-count-label {{ font-size:17px; }}
-        .presence-count-help {{ margin-top:4px; text-align:left; }}
-      }}
-      @media (max-width:390px) {{ .presence-count-circle {{ width:100px; }} .presence-count-value {{ font-size:28px; }} }}
-    </style>
-    <section class="presence-home" aria-labelledby="presence-home-title">
-      <a class="my-checkin" href="/mobile" aria-label="Ma présence"><span data-fr="Ma présence" data-en="My check-in">Ma présence</span></a>
-      <header class="presence-home-head">
-        <div class="presence-home-kicker">{html.escape(project_name)}</div>
-        <h1 id="presence-home-title">Aujourd'hui</h1>
-        <div class="presence-home-date">{html.escape(day_text)}</div>
-      </header>
-      <div class="presence-counts">
-        <article class="presence-count-card children">
-          <div class="presence-count-circle" aria-label="{children_present} enfants présents sur {children_total}"><div class="presence-count-value">{children_present}/{children_total}</div></div>
-          <div class="presence-count-copy"><div class="presence-count-label">Enfants</div><div class="presence-count-help">Présents / inscrits</div></div>
-        </article>
-        <article class="presence-count-card staff">
-          <div class="presence-count-circle" aria-label="{staff_present} employés présents sur {staff_total}"><div class="presence-count-value">{staff_present}/{staff_total}</div></div>
-          <div class="presence-count-copy"><div class="presence-count-label">Employés</div><div class="presence-count-help">Présents / inscrits</div></div>
-        </article>
-      </div>
-    </section>
-    """
-    return html_page("Accueil", user, body)
 
 def render_mobile_dashboard(user, query):
     if user["role"] in STAFF_MOBILE_ATTENDANCE_ROLES:
@@ -8083,14 +6021,14 @@ def render_mobile_dashboard(user, query):
             checkout_time_html = f'<div class="mobile-action-time">{html.escape(checkout_times[-1])}</div>' if checkout_times else '<div class="mobile-action-time">&nbsp;</div>'
             actions = "" if selected_date != today_text() and is_child_account else f"""
               <div class="mobile-actions">
-                <form method="post" action="/child/{selected_child['id']}/event" onsubmit="return confirm('Confirmer arrivée ?')">
+                <form method="post" action="/child/{selected_child['id']}/event" onsubmit="return confirm('Confirmer arrivée de {html.escape(selected_child['name'], quote=True)} ?')">
                   <input type="hidden" name="date" value="{html.escape(selected_date)}">
                   <input type="hidden" name="event_type" value="checkin">
                   <input type="hidden" name="return_to" value="mobile">
                   <button class="mobile-btn arrive" type="submit" {"disabled" if checkin_disabled else ""}>Arrivée</button>
                   {checkin_time_html}
                 </form>
-                <form method="post" action="/child/{selected_child['id']}/event" onsubmit="return confirm('Confirmer départ ?')">
+                <form method="post" action="/child/{selected_child['id']}/event" onsubmit="return confirm('Confirmer départ de {html.escape(selected_child['name'], quote=True)} ?')">
                   <input type="hidden" name="date" value="{html.escape(selected_date)}">
                   <input type="hidden" name="event_type" value="checkout">
                   <input type="hidden" name="return_to" value="mobile">
@@ -8185,15 +6123,9 @@ def render_mobile_dashboard(user, query):
         .nav {{ gap:5px; }}
         .nav a, .nav button {{ padding:6px 8px; font-size:12px; }}
         .mobile-filters {{ grid-template-columns:1fr; gap:6px; }}
-        .child-mobile-shell .mobile-child {{ justify-items:center; text-align:center; }}
-        .child-mobile-shell .mobile-child-head {{ display:flex; flex-direction:column; justify-content:center; gap:8px; width:100%; text-align:center; }}
-        .child-mobile-shell .mobile-child-main {{ display:grid; justify-items:center; }}
-        .child-mobile-shell .mobile-actions {{ width:100%; max-width:240px; gap:12px; justify-items:center; }}
-        .child-mobile-shell .mobile-actions form {{ display:grid; justify-items:center; width:100%; }}
-        .child-mobile-shell .mobile-btn {{ width:92px; min-width:92px; height:92px; min-height:92px; padding:8px; border-radius:50%; font-size:14px; line-height:1.1; }}
       }}
     </style>
-    <div class="mobile-shell {'child-mobile-shell' if is_child_account else ''}">
+    <div class="mobile-shell">
       {mobile_overview_html}
       <div class="mobile-list">
         {selected_child_panel if selected_child else (''.join(child_cards) if child_cards else '<div class="panel mobile-empty">Aucun enfant trouvé.</div>')}
@@ -8203,479 +6135,51 @@ def render_mobile_dashboard(user, query):
     return html_page("Mobile", user, body)
 
 
-AGENDA_ICON_OPTIONS = {
-    "humeur": (
-        ("triste", "😟", "Un peu"),
-        ("bien", "🙂", "Bien"),
-        ("excellent", "😄", "Excellent"),
-    ),
-    "participation": (
-        ("faible", "🌧️", "Passable"),
-        ("bonne", "🌤️", "Bonne"),
-        ("active", "☀️", "Active"),
-    ),
-    "repas": (
-        ("un_peu", "🍎", "Un peu"),
-        ("raisonnable", "🍎🍎", "Raisonnable"),
-        ("formidable", "🍎🍎🍎", "Formidable"),
-    ),
-}
-AGENDA_PERIODS = (("matin", "MATIN"), ("apres_midi", "APRÈS-MIDI"))
-AGENDA_WEEKDAYS = ("LUNDI", "MARDI", "MERCREDI", "JEUDI", "VENDREDI", "SAMEDI", "DIMANCHE")
-AGENDA_TEMPLATE_CSS = """
-.agenda-sheet { width:100%; max-width:760px; margin:0 auto; border:2px solid #52665b; border-radius:7px; background:#fff; overflow:hidden; box-shadow:0 4px 14px rgba(30,50,40,.1); }
-.agenda-sheet-head { display:grid; grid-template-columns:minmax(0,1fr) minmax(220px,.7fr); border-bottom:2px solid #52665b; }
-.agenda-head-field { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:center; gap:7px; min-width:0; padding:7px 10px; }
-.agenda-head-field + .agenda-head-field { border-left:1px solid #7f8f86; }
-.agenda-head-label { font-size:10px; font-weight:900; color:#3e5247; text-transform:uppercase; }
-.agenda-head-value { min-width:0; border-bottom:1px solid #7f8f86; padding:2px 4px; font-size:13px; font-weight:800; overflow-wrap:anywhere; }
-.agenda-head-date .agenda-head-value { white-space:nowrap; }
-.agenda-main-grid { display:grid; grid-template-columns:1fr 1fr; align-items:stretch; border-bottom:2px solid #52665b; }
-.agenda-column { display:grid; grid-template-rows:auto 1fr; min-width:0; }
-.agenda-column + .agenda-column { border-left:1px solid #7f8f86; }
-.agenda-category { padding:7px 8px; border-bottom:1px solid #aebbb4; }
-.agenda-diner { display:grid; align-content:start; }
-.agenda-meal-note-label { margin-top:7px; }
-.agenda-meal-note { min-height:78px !important; resize:vertical; }
-.agenda-meal-note-read { min-height:78px; }
-.agenda-category-title { margin:0 0 4px; text-align:left; font-size:10px; line-height:1; font-weight:900; color:#3e5247; text-transform:uppercase; }
-.agenda-options { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:3px; align-items:start; }
-.agenda-choice { position:relative; display:grid; justify-items:center; gap:2px; min-width:0; cursor:pointer; text-align:center; }
-.agenda-choice input { position:absolute; opacity:0; pointer-events:none; }
-.agenda-choice-box { display:grid; justify-items:center; gap:2px; width:100%; min-width:0; }
-.agenda-icon-ring { width:58px; height:58px; max-width:100%; border:3px solid transparent; border-radius:50%; display:grid; place-items:center; background:#fff; transition:border-color .15s,box-shadow .15s,background .15s; }
-.agenda-icon-ring img { width:46px; height:46px; max-width:82%; max-height:82%; object-fit:contain; display:block; border-radius:6px; }
-.agenda-choice input:focus-visible + .agenda-choice-box .agenda-icon-ring { outline:2px solid var(--blue); outline-offset:1px; }
-.agenda-choice input:checked + .agenda-choice-box .agenda-icon-ring, .agenda-choice-box.selected .agenda-icon-ring { border-color:#18a558; box-shadow:0 0 0 2px rgba(24,165,88,.16); background:#f1fbf5; }
-.agenda-choice-label { min-height:20px; font-size:9px; line-height:1.05; font-weight:800; color:#475a50; overflow-wrap:anywhere; }
-.agenda-sieste { display:grid; grid-template-columns:94px minmax(0,1fr); gap:3px; align-items:start; padding:7px 8px; }
-.agenda-sieste-visual { display:grid; justify-items:center; align-content:start; gap:3px; }
-.agenda-sieste-image img { display:block; width:94px; height:94px; object-fit:contain; }
-.agenda-sleep-options { display:grid; grid-template-columns:1fr 1fr; gap:5px; }
-.agenda-sleep-choice { position:relative; display:grid; justify-items:center; cursor:pointer; }
-.agenda-sleep-choice input { position:absolute; opacity:0; pointer-events:none; }
-.agenda-thumb-ring { width:45px; height:45px; border:3px solid transparent; border-radius:50%; display:grid; place-items:center; background:#fff; font-size:25px; line-height:1; }
-.agenda-sleep-choice input:checked + .agenda-thumb-ring, .agenda-thumb-ring.selected { border-color:#18a558; box-shadow:0 0 0 2px rgba(24,165,88,.16); background:#f1fbf5; }
-.agenda-sieste-fields { display:grid; gap:6px; min-width:0; }
-.agenda-reason-field { grid-column:1 / -1; margin:0 12px; }
-.agenda-field-label { display:grid; gap:2px; margin:0; font-size:9px; font-weight:900; color:#3e5247; text-transform:uppercase; }
-.agenda-field-label input, .agenda-field-label textarea { width:100%; min-width:0; border:1px solid #aab6b0; border-radius:4px; padding:5px 6px; background:#fff; font-size:11px; text-transform:none; }
-.agenda-field-label textarea { min-height:58px; resize:vertical; }
-.agenda-read-value { min-height:29px; border:1px solid #aab6b0; border-radius:4px; padding:5px 6px; background:#fafcfb; color:#17231d; font-size:11px; font-weight:500; text-transform:none; white-space:pre-wrap; overflow-wrap:anywhere; }
-.agenda-day-text { padding:8px; }
-.agenda-day-title { margin:0 0 5px; font-size:10px; font-weight:900; color:#3e5247; text-transform:uppercase; }
-.agenda-day-text textarea { width:100%; min-height:74px; resize:vertical; border:1px solid #9eaba4; border-radius:4px; padding:5px 7px; font-size:12px; line-height:22px; background:repeating-linear-gradient(#fff,#fff 21px,#dce3df 22px); }
-.agenda-text-readonly { min-height:74px; border:1px solid #9eaba4; border-radius:4px; padding:5px 7px; font-size:12px; line-height:22px; white-space:pre-wrap; overflow-wrap:anywhere; background:repeating-linear-gradient(#fff,#fff 21px,#dce3df 22px); }
-.agenda-communication { padding:8px; border-top:1px solid #aebbb4; }
-.agenda-communication textarea { width:100%; min-height:74px; resize:vertical; border:1px solid #9eaba4; border-radius:4px; padding:5px 7px; font-size:12px; line-height:22px; background:repeating-linear-gradient(#fff,#fff 21px,#dce3df 22px); }
-.agenda-communication-readonly { min-height:74px; border:1px solid #9eaba4; border-radius:4px; padding:5px 7px; font-size:12px; line-height:22px; white-space:pre-wrap; overflow-wrap:anywhere; background:repeating-linear-gradient(#fff,#fff 21px,#dce3df 22px); }
-.agenda-communication-actions { display:flex; align-items:center; gap:8px; margin-top:7px; flex-wrap:wrap; }
-.agenda-editor { border:1px solid var(--line); border-radius:10px; background:#f7faf8; overflow:hidden; }
-.agenda-editor summary { cursor:pointer; display:flex; align-items:center; gap:7px; padding:10px 12px; font-weight:800; list-style:none; }
-.agenda-parent-reply-dot { width:9px; height:9px; flex:0 0 9px; border-radius:50%; background:#dc2626; box-shadow:0 0 0 2px rgba(220,38,38,.14); }
-.agenda-editor summary::-webkit-details-marker { display:none; }
-.agenda-editor[open] summary { border-bottom:1px solid var(--line); background:#eef6f1; }
-.agenda-editor-body { padding:9px; }
-.agenda-existing-note { display:block; margin-bottom:6px; color:#187147; font-size:11px; font-weight:800; }
-@media (max-width:560px) {
-  .agenda-sheet-head { grid-template-columns:1fr 1fr; }
-  .agenda-head-field { grid-template-columns:1fr; gap:2px; padding:5px; }
-  .agenda-main-grid { grid-template-columns:1fr 1fr; }
-  .agenda-icon-ring { width:47px; height:47px; }
-  .agenda-icon-ring img { width:37px; height:37px; }
-  .agenda-choice-label { font-size:8px; }
-  .agenda-category { padding:5px 4px; }
-  .agenda-sieste { grid-template-columns:60px minmax(0,1fr); gap:2px; padding:5px; }
-  .agenda-reason-field { margin:0 3px; }
-  .agenda-sieste-image img { width:66px; height:66px; }
-  .agenda-thumb-ring { width:38px; height:38px; font-size:21px; }
-  .agenda-field-label { font-size:8px; }
-  .agenda-field-label input, .agenda-field-label textarea { padding:4px; font-size:10px; }
-}
-"""
-
-def parse_agenda_template_data(raw_value):
-    if not raw_value:
-        return {}
-    try:
-        data = json.loads(str(raw_value))
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def agenda_template_payload_from_form(form, child_person_id):
-    periods = {}
-    for period_key, _period_label in AGENDA_PERIODS:
-        values = {}
-        for category in AGENDA_ICON_OPTIONS:
-            value = form.get(f"agenda_{child_person_id}_{period_key}_{category}", [""])[0].strip()
-            allowed = {option[0] for option in AGENDA_ICON_OPTIONS[category]}
-            values[category] = value if value in allowed else ""
-        values["sieste"] = form.get(f"agenda_{child_person_id}_{period_key}_sieste", [""])[0].strip()[:120]
-        values["selle"] = form.get(f"agenda_{child_person_id}_{period_key}_selle", [""])[0].strip()[:120]
-        values["texte"] = form.get(f"agenda_{child_person_id}_{period_key}_texte", [""])[0].strip()[:2000]
-        sommeil = form.get(f"agenda_{child_person_id}_{period_key}_sommeil", [""])[0].strip()
-        values["sommeil"] = sommeil if sommeil in {"bon", "difficile"} else ""
-        values["repos"] = form.get(f"agenda_{child_person_id}_{period_key}_repos", [""])[0].strip()[:120]
-        values["raison"] = form.get(f"agenda_{child_person_id}_{period_key}_raison", [""])[0].strip()[:500]
-        values["repas_note"] = form.get(f"agenda_{child_person_id}_{period_key}_repas_note", [""])[0].strip()[:500]
-        periods[period_key] = values
-    text_value = form.get(f"body_person_{child_person_id}", [""])[0].strip()
-    return {"version": 1, "periods": periods, "text": text_value}
-
-
-def agenda_template_has_content(payload):
-    if str(payload.get("text", "")).strip():
-        return True
-    periods = payload.get("periods", {})
-    if not isinstance(periods, dict):
-        return False
-    return any(
-        str(value or "").strip()
-        for period in periods.values()
-        if isinstance(period, dict)
-        for value in period.values()
-    )
-
-
-def agenda_icon_url(category, value):
-    icon_path = DATA_DIR / "form" / "agenda_icons" / f"{category}_{value}.webp"
-    if not icon_path.is_file():
-        return ""
-    return "/media/" + file_path_token(icon_path)
-
-
-def render_agenda_icon_group(child_person_id, period_key, category, selected_value="", readonly=False):
-    choices = []
-    field_name = f"agenda_{child_person_id}_{period_key}_{category}"
-    for value, _legacy_symbol, label in AGENDA_ICON_OPTIONS[category]:
-        selected = value == selected_value
-        selected_class = " selected" if readonly and selected else ""
-        control = ""
-        if not readonly:
-            control = (
-                f'<input type="radio" name="{field_name}" value="{html.escape(value, quote=True)}" '
-                f'aria-label="{html.escape(label, quote=True)}" {"checked" if selected else ""}>'
-            )
-        icon_url = agenda_icon_url(category, value)
-        icon_html = (
-            f'<img src="{html.escape(icon_url, quote=True)}" alt="" aria-hidden="true">'
-            if icon_url else '<span aria-hidden="true">?</span>'
-        )
-        choices.append(
-            f'<label class="agenda-choice">{control}<span class="agenda-choice-box{selected_class}">'
-            f'<span class="agenda-icon-ring">{icon_html}</span>'
-            f'<span class="agenda-choice-label">{html.escape(label)}</span></span></label>'
-        )
-    return '<div class="agenda-options">' + "".join(choices) + "</div>"
-
-
-def render_daily_agenda_template(child_name, day_text, child_person_id, payload=None, readonly=False):
-    payload = payload if isinstance(payload, dict) else {}
-    periods_data = payload.get("periods", {}) if isinstance(payload.get("periods", {}), dict) else {}
-    day_data = periods_data.get("matin", {})
-    if not isinstance(day_data, dict):
-        day_data = {}
-    try:
-        weekday = AGENDA_WEEKDAYS[datetime.strptime(day_text, "%Y-%m-%d").weekday()]
-    except (ValueError, TypeError):
-        weekday = ""
-    date_display = f"{day_text} {weekday[:3]}" if weekday else day_text
-
-    sieste_path = DATA_DIR / "form" / "agenda_icons" / "sieste.webp"
-    sieste_url = "/media/" + file_path_token(sieste_path) if sieste_path.is_file() else ""
-    sieste_image_html = (
-        f'<img src="{html.escape(sieste_url, quote=True)}" alt="Enfant qui dort">'
-        if sieste_url else '<span class="muted">Image sieste</span>'
-    )
-    consignes_html = render_agenda_icon_group(
-        child_person_id, "matin", "humeur", str(day_data.get("humeur", "") or ""), readonly
-    )
-    participation_html = render_agenda_icon_group(
-        child_person_id, "matin", "participation", str(day_data.get("participation", "") or ""), readonly
-    )
-    diner_html = render_agenda_icon_group(
-        child_person_id, "matin", "repas", str(day_data.get("repas", "") or ""), readonly
-    )
-
-    sommeil_value = str(day_data.get("sommeil", "") or "")
-    sleep_choices = []
-    for value, symbol, label in (("bon", "👍", "Bon"), ("difficile", "👎", "Difficile")):
-        selected = sommeil_value == value
-        if readonly:
-            control = ""
-            selected_class = " selected" if selected else ""
-        else:
-            control = (
-                f'<input type="radio" name="agenda_{child_person_id}_matin_sommeil" '
-                f'value="{value}" aria-label="{label}" {"checked" if selected else ""}>'
-            )
-            selected_class = ""
-        sleep_choices.append(
-            f'<label class="agenda-sleep-choice">{control}'
-            f'<span class="agenda-thumb-ring{selected_class}" title="{label}">{symbol}</span></label>'
-        )
-
-    repos_value = str(day_data.get("repos", "") or day_data.get("sieste", "") or "")
-    raison_value = str(day_data.get("raison", "") or day_data.get("selle", "") or "")
-    repas_note_value = str(day_data.get("repas_note", "") or "")
-    if readonly:
-        repos_control = f'<div class="agenda-read-value">{html.escape(repos_value) or "&nbsp;"}</div>'
-        raison_control = f'<div class="agenda-read-value">{html.escape(raison_value) or "&nbsp;"}</div>'
-        repas_note_control = f'<div class="agenda-read-value agenda-meal-note-read">{html.escape(repas_note_value) or "&nbsp;"}</div>'
-    else:
-        repos_control = (
-            f'<input type="text" name="agenda_{child_person_id}_matin_repos" '
-            f'value="{html.escape(repos_value, quote=True)}" maxlength="120">'
-        )
-        raison_control = (
-            f'<textarea name="agenda_{child_person_id}_matin_raison" maxlength="500">'
-            f'{html.escape(raison_value)}</textarea>'
-        )
-        repas_note_control = (
-            f'<textarea class="agenda-meal-note" name="agenda_{child_person_id}_matin_repas_note" maxlength="500">'
-            f'{html.escape(repas_note_value)}</textarea>'
-        )
-
-    final_text = str(payload.get("text", "") or "")
-    if not final_text:
-        legacy_notes = []
-        for period_key, _period_label in AGENDA_PERIODS:
-            period = periods_data.get(period_key, {})
-            if isinstance(period, dict) and str(period.get("texte", "") or "").strip():
-                legacy_notes.append(str(period.get("texte", "")).strip())
-        final_text = "\n".join(legacy_notes)
-    if readonly:
-        final_control = f'<div class="agenda-text-readonly">{html.escape(final_text) or "&nbsp;"}</div>'
-    else:
-        final_control = (
-            f'<textarea name="body_person_{child_person_id}" rows="3" maxlength="4000" '
-            f'aria-label="Déroulement de la journée">{html.escape(final_text)}</textarea>'
-        )
-
-    return f"""
-      <div class="agenda-sheet">
-        <div class="agenda-sheet-head">
-          <div class="agenda-head-field"><div class="agenda-head-value">{html.escape(child_name)}</div></div>
-          <div class="agenda-head-field agenda-head-date"><div class="agenda-head-value">{html.escape(date_display)}</div></div>
-        </div>
-        <div class="agenda-main-grid">
-          <div class="agenda-column">
-            <section class="agenda-category"><h5 class="agenda-category-title">Consignes</h5>{consignes_html}</section>
-            <section class="agenda-sieste">
-              <div class="agenda-sieste-visual">
-                <h5 class="agenda-category-title">Sieste</h5>
-                <div class="agenda-sieste-image">{sieste_image_html}</div>
-              </div>
-              <div class="agenda-sieste-fields">
-                <label class="agenda-field-label">Beau sommeil<div class="agenda-sleep-options">{''.join(sleep_choices)}</div></label>
-                <label class="agenda-field-label">Repos{repos_control}</label>
-              </div>
-              <label class="agenda-field-label agenda-reason-field">Raison{raison_control}</label>
-            </section>
-          </div>
-          <div class="agenda-column">
-            <section class="agenda-category"><h5 class="agenda-category-title">Participation</h5>{participation_html}</section>
-            <section class="agenda-category agenda-diner"><h5 class="agenda-category-title">Dîner</h5>{diner_html}<label class="agenda-field-label agenda-meal-note-label">Repas :{repas_note_control}</label></section>
-          </div>
-        </div>
-        <section class="agenda-day-text">
-          <h4 class="agenda-day-title">Déroulement de la journée</h4>
-          {final_control}
-        </section>
-      </div>
-    """
-
-def render_agenda_communication(entry_id, value="", editable=False, saved=False):
-    value = str(value or "")
-    if editable:
-        saved_html = '<span class="small" style="color:#187147;font-weight:800">Communication enregistrée.</span>' if saved else ""
-        return f"""
-        <form method="post" action="/agenda/communication" class="agenda-communication-form">
-          <input type="hidden" name="entry_id" value="{int(entry_id)}">
-          <section class="agenda-communication">
-            <h4 class="agenda-day-title">Communication</h4>
-            <textarea name="communication" rows="3" maxlength="2000" aria-label="Communication">{html.escape(value)}</textarea>
-            <div class="agenda-communication-actions"><button class="btn primary" type="submit">Enregistrer la communication</button>{saved_html}</div>
-          </section>
-        </form>
-        """
-    return f"""
-      <section class="agenda-communication">
-        <h4 class="agenda-day-title">Communication</h4>
-        <div class="agenda-communication-readonly">{html.escape(value) or "&nbsp;"}</div>
-      </section>
-    """
-
-def save_or_replace_child_agenda_entry(
-    conn, child_user_id, child_person_id, class_name, day_text, title, body_text,
-    template_data_json, author_user_id, author_name, saved_at,
-):
-    existing_entries = conn.execute(
-        """
-        SELECT id, parent_communication, parent_communication_updated_at
-        FROM child_agenda_entries
-        WHERE child_person_id = ? AND day_text = ?
-        ORDER BY id DESC
-        """,
-        (child_person_id, day_text),
-    ).fetchall()
-    if existing_entries:
-        keep_id = int(existing_entries[0]["id"])
-        communication_entry = next(
-            (
-                row for row in sorted(
-                    existing_entries,
-                    key=lambda item: (str(item["parent_communication_updated_at"] or ""), int(item["id"])),
-                    reverse=True,
-                )
-                if str(row["parent_communication"] or "").strip()
-            ),
-            None,
-        )
-        conn.execute(
-            """
-            UPDATE child_agenda_entries
-            SET class_name = ?, title = ?, body = ?, template_data_json = ?,
-                author_user_id = ?, author_name = ?, created_at = ?
-            WHERE id = ?
-            """,
-            (
-                class_name, title, body_text, template_data_json,
-                author_user_id, author_name, saved_at, keep_id,
-            ),
-        )
-        if communication_entry:
-            conn.execute(
-                """
-                UPDATE child_agenda_entries
-                SET parent_communication = ?, parent_communication_updated_at = ?
-                WHERE id = ?
-                """,
-                (
-                    communication_entry["parent_communication"],
-                    communication_entry["parent_communication_updated_at"],
-                    keep_id,
-                ),
-            )
-        duplicate_ids = [int(row["id"]) for row in existing_entries[1:]]
-        if duplicate_ids:
-            placeholders = ",".join("?" for _ in duplicate_ids)
-            conn.execute(f"DELETE FROM child_agenda_entries WHERE id IN ({placeholders})", duplicate_ids)
-        return True
-    conn.execute(
-        """
-        INSERT INTO child_agenda_entries(
-            child_user_id, child_person_id, class_name, day_text, title, body,
-            template_data_json, author_user_id, author_name, created_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            child_user_id, child_person_id, class_name, day_text, title, body_text,
-            template_data_json, author_user_id, author_name, saved_at,
-        ),
-    )
-    return False
-
-def render_child_agenda(user, query=None):
+def render_child_agenda(user):
     if user["role"] != "children":
         return html_page("Forbidden", user, '<div class="panel">Agenda is available for child accounts only.</div>')
-    query = query or {}
     with connect_db() as conn:
-        project_id = effective_project_id(conn, user)
         if user["person_id"]:
             entries = conn.execute(
                 """
-                SELECT child_agenda_entries.*
+                SELECT *
                 FROM child_agenda_entries
-                JOIN web_users AS child_owner ON child_owner.id = child_agenda_entries.child_user_id
-                WHERE child_owner.project_id = ?
-                  AND (child_agenda_entries.child_user_id = ? OR child_agenda_entries.child_person_id = ?)
-                ORDER BY child_agenda_entries.day_text DESC, child_agenda_entries.created_at DESC, child_agenda_entries.id DESC
+                WHERE child_user_id = ? OR child_person_id = ?
+                ORDER BY day_text DESC, created_at DESC, id DESC
                 """,
-                (project_id, user["id"], user["person_id"]),
+                (user["id"], user["person_id"]),
             ).fetchall()
         else:
             entries = conn.execute(
                 """
-                SELECT child_agenda_entries.*
+                SELECT *
                 FROM child_agenda_entries
-                JOIN web_users AS child_owner ON child_owner.id = child_agenda_entries.child_user_id
-                WHERE child_owner.project_id = ? AND child_agenda_entries.child_user_id = ?
-                ORDER BY child_agenda_entries.day_text DESC, child_agenda_entries.created_at DESC, child_agenda_entries.id DESC
+                WHERE child_user_id = ?
+                ORDER BY day_text DESC, created_at DESC, id DESC
                 """,
-                (project_id, user["id"]),
+                (user["id"],),
             ).fetchall()
-    saved_entry_id = query.get("communication", [""])[0]
-    communication_by_day = {}
-    saved_days = set()
-    for entry in entries:
-        entry_key = (int(entry["child_person_id"] or user["person_id"] or 0), str(entry["day_text"]))
-        communication = entry["parent_communication"] if "parent_communication" in entry.keys() else ""
-        if str(communication or "").strip() and not str(communication_by_day.get(entry_key, "") or "").strip():
-            communication_by_day[entry_key] = communication
-        if saved_entry_id == str(entry["id"]):
-            saved_days.add(entry_key)
-    visible_entries = []
-    seen_days = set()
-    for entry in entries:
-        entry_key = (int(entry["child_person_id"] or user["person_id"] or 0), str(entry["day_text"]))
-        if entry_key in seen_days:
-            continue
-        seen_days.add(entry_key)
-        visible_entries.append(entry)
     rows = []
-    for entry_index, entry in enumerate(visible_entries):
-        entry_key = (int(entry["child_person_id"] or user["person_id"] or 0), str(entry["day_text"]))
-        template_payload = parse_agenda_template_data(
-            entry["template_data_json"] if "template_data_json" in entry.keys() else ""
-        )
-        if template_payload:
-            entry_content_html = render_daily_agenda_template(
-                user["display_name"], entry["day_text"], int(entry["child_person_id"] or user["person_id"] or 0),
-                template_payload, readonly=True,
-            )
-        else:
-            entry_content_html = f'<div class="muted-box" style="margin-top:10px;white-space:pre-wrap">{html.escape(entry["body"])}</div>'
-        if entry_index == 0:
-            entry_content_html += render_agenda_communication(
-                int(entry["id"]),
-                communication_by_day.get(entry_key, entry["parent_communication"] if "parent_communication" in entry.keys() else ""),
-                editable=True,
-                saved=entry_key in saved_days,
-            )
+    for entry in entries:
         rows.append(
             f"""
-            <details class="child-agenda-entry">
-              <summary>
-                <span>{html.escape(entry['day_text'])}</span>
-                <span class="small muted">Par {html.escape(entry['author_name'] or 'Educatrice')}</span>
-              </summary>
-              <div class="child-agenda-entry-content">
-                <div style="font-weight:800">{html.escape(entry['title'] or 'Rapport')}</div>
-                <div class="small muted">{html.escape(entry['class_name'] or '')}</div>
-                <div style="margin-top:10px">{entry_content_html}</div>
-                <div class="small muted" style="margin-top:8px">{html.escape(entry['created_at'])}</div>
+            <div class="panel" style="padding:12px">
+              <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap">
+                <div>
+                  <div style="font-weight:800">{html.escape(entry['title'] or 'Rapport')}</div>
+                  <div class="small muted">{html.escape(entry['day_text'])} &middot; {html.escape(entry['class_name'] or '')}</div>
+                </div>
+                <div class="small muted">Par {html.escape(entry['author_name'] or 'Educatrice')}</div>
               </div>
-            </details>
+              <div class="muted-box" style="margin-top:10px;white-space:pre-wrap">{html.escape(entry['body'])}</div>
+              <div class="small muted" style="margin-top:8px">{html.escape(entry['created_at'])}</div>
+            </div>
             """
         )
     body = f"""
-    <style>
-      {AGENDA_TEMPLATE_CSS}
-      .child-agenda-entry {{ padding:0; overflow:hidden; border:0; border-radius:0; background:transparent; box-shadow:none; }}
-      .child-agenda-entry summary {{ display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 2px; cursor:pointer; font-weight:850; line-height:1.15; list-style:none; }}
-      .child-agenda-entry summary::-webkit-details-marker {{ display:none; }}
-      .child-agenda-entry summary::after {{ content:"＋"; color:var(--blue); font-size:18px; line-height:1; }}
-      .child-agenda-entry[open] summary::after {{ content:"−"; }}
-      .child-agenda-entry-content {{ padding:0 2px 8px; border-top:1px solid var(--line); }}
-      .child-agenda-entry-content > div:first-child {{ margin-top:10px; }}
-    </style>
     <div class="panel">
       <h2>Agenda</h2>
-      <div class="grid" style="gap:2px">
+      <div class="grid" style="gap:10px">
         {''.join(rows) or '<div class="muted-box">Aucun événement pour le moment.</div>'}
       </div>
     </div>
@@ -8685,7 +6189,7 @@ def render_child_agenda(user, query=None):
 
 def render_staff_agenda(user, query):
     if user["role"] == "children":
-        return render_child_agenda(user, query)
+        return render_child_agenda(user)
     selected_class = query.get("class", [""])[0]
     selected_day = query.get("date", [today_text()])[0]
     try:
@@ -8693,7 +6197,6 @@ def render_staff_agenda(user, query):
     except ValueError:
         selected_day = today_text()
     with connect_db() as conn:
-        project_id = effective_project_id(conn, user)
         classes = classes_for_user(user, conn)
         if not selected_class and classes:
             selected_class = get_last_selected_class(conn, user["id"], classes[0])
@@ -8701,53 +6204,11 @@ def render_staff_agenda(user, query):
             selected_class = classes[0] if classes else ""
         set_last_selected_class(conn, user["id"], selected_class)
         children = get_children(conn, user, selected_class) if selected_class else []
-        person_ids = [int(child["id"]) for child in children]
-        existing_agenda_by_person = {}
-        existing_communication_by_person = {}
+        present_children = [child for child in children if current_child_status(conn, child["id"], selected_day) == "P"]
         child_accounts_by_person = {}
-        if person_ids:
+        if present_children:
+            person_ids = [int(child["id"]) for child in present_children]
             placeholders = ",".join("?" for _ in person_ids)
-            existing_rows = conn.execute(
-                f"""
-                SELECT child_agenda_entries.*
-                FROM child_agenda_entries
-                JOIN web_users ON web_users.id = child_agenda_entries.child_user_id
-                WHERE web_users.project_id = ?
-                  AND child_agenda_entries.class_name = ?
-                  AND child_agenda_entries.day_text = ?
-                  AND child_agenda_entries.child_person_id IN ({placeholders})
-                ORDER BY child_agenda_entries.id DESC
-                """,
-                [project_id, selected_class, selected_day] + person_ids,
-            ).fetchall()
-            for entry in existing_rows:
-                person_id = int(entry["child_person_id"])
-                existing_agenda_by_person.setdefault(person_id, entry)
-                if str(entry["parent_communication"] or "").strip() and person_id not in existing_communication_by_person:
-                    existing_communication_by_person[person_id] = entry
-        communication_reads_by_entry = {}
-        communication_entry_ids = [int(entry["id"]) for entry in existing_communication_by_person.values()]
-        if communication_entry_ids:
-            placeholders = ",".join("?" for _ in communication_entry_ids)
-            read_rows = conn.execute(
-                f"""
-                SELECT entry_id, communication_version
-                FROM agenda_communication_reads
-                WHERE user_id = ? AND entry_id IN ({placeholders})
-                """,
-                [int(user["id"])] + communication_entry_ids,
-            ).fetchall()
-            communication_reads_by_entry = {
-                int(row["entry_id"]): str(row["communication_version"] or "") for row in read_rows
-            }
-        agenda_children = [
-            child for child in children
-            if child_attended_on_day(conn, int(child["id"]), selected_day)
-            or int(child["id"]) in existing_agenda_by_person
-        ]
-        if agenda_children:
-            agenda_person_ids = [int(child["id"]) for child in agenda_children]
-            placeholders = ",".join("?" for _ in agenda_person_ids)
             child_accounts = conn.execute(
                 f"""
                 SELECT web_users.*, persons.name AS child_name
@@ -8759,7 +6220,7 @@ def render_staff_agenda(user, query):
                   AND web_users.person_id IN ({placeholders})
                 ORDER BY persons.name
                 """,
-                [project_id] + agenda_person_ids,
+                [int(user["project_id"] or 1)] + person_ids,
             ).fetchall()
             for account in child_accounts:
                 child_accounts_by_person.setdefault(int(account["person_id"]), []).append(account)
@@ -8783,88 +6244,36 @@ def render_staff_agenda(user, query):
         for row in recent
     )
     agenda_rows = []
-    for child in agenda_children:
-        child_person_id = int(child["id"])
-        child_photo_url = child_card_image_url(child["photo_path"])
-        child_initial = html.escape((child["name"] or "?").strip()[:1].upper() or "?")
-        child_avatar_html = (
-            f'<img class="agenda-child-avatar" src="{html.escape(child_photo_url, quote=True)}" alt="">'
-            if child_photo_url else
-            f'<span class="agenda-child-avatar agenda-child-avatar-placeholder" aria-hidden="true">{child_initial}</span>'
-        )
-        accounts = child_accounts_by_person.get(child_person_id, [])
+    for child in present_children:
+        accounts = child_accounts_by_person.get(int(child["id"]), [])
         if accounts:
-            existing_entry = existing_agenda_by_person.get(child_person_id)
-            existing_payload = {}
-            existing_note = ""
-            if existing_entry:
-                existing_payload = parse_agenda_template_data(existing_entry["template_data_json"])
-                if not existing_payload and existing_entry["body"]:
-                    existing_payload = {"version": 1, "periods": {}, "text": existing_entry["body"]}
-                existing_note = '<span class="agenda-existing-note">Agenda déjà envoyé — les modifications remplaceront la version de cette date.</span>'
-            editor_html = (
-                f'<input type="hidden" name="child_person_ids" value="{child_person_id}">'
-                + existing_note
-                + render_daily_agenda_template(
-                    child["name"], selected_day, child_person_id, payload=existing_payload, readonly=False
-                )
-                + (render_agenda_communication(
-                    int(existing_entry["id"]),
-                    (existing_communication_by_person.get(child_person_id) or existing_entry)["parent_communication"],
-                    editable=False,
-                ) if existing_entry else "")
+            field_name = f"body_person_{child['id']}"
+            input_html = (
+                f'<input type="hidden" name="child_person_ids" value="{child["id"]}">'
+                f'<textarea name="{field_name}" rows="3" placeholder="Contenu pour {html.escape(child["name"])}"></textarea>'
             )
         else:
-            editor_html = '<div class="muted-box">Aucun compte enfant actif. La fiche ne peut pas être envoyée.</div>'
-        communication_entry = existing_communication_by_person.get(child_person_id)
-        communication_entry_id = int(communication_entry["id"]) if communication_entry else 0
-        communication_version = (
-            str(communication_entry["parent_communication_updated_at"] or communication_entry["created_at"] or communication_entry_id)
-            if communication_entry else ""
-        )
-        has_unread_parent_reply = bool(
-            communication_entry
-            and communication_reads_by_entry.get(communication_entry_id) != communication_version
-        )
-        parent_reply_dot = (
-            '<span class="agenda-parent-reply-dot" role="img" aria-label="Réponse non lue" title="Réponse non lue"></span>'
-            if has_unread_parent_reply else ""
-        )
-        reply_data = f' data-agenda-reply-entry-id="{communication_entry_id}"' if has_unread_parent_reply else ""
-        details_open = child_person_id in existing_agenda_by_person and not has_unread_parent_reply
+            input_html = '<textarea rows="3" disabled placeholder="Aucun compte enfant actif"></textarea>'
         agenda_rows.append(
             f"""
-            <details class="agenda-editor" {"open" if details_open else ""}{reply_data}>
-              <summary><span class="agenda-child-heading">{child_avatar_html}<span>{html.escape(child['name'])}</span>{parent_reply_dot}</span></summary>
-              <div class="agenda-editor-body">{editor_html}</div>
-            </details>
+            <tr>
+              <td style="width:170px;white-space:nowrap">
+                <div style="font-weight:700">{html.escape(child['name'])}</div>
+              </td>
+              <td>{input_html}</td>
+            </tr>
             """
         )
     sendable_count = sum(len(accounts) for accounts in child_accounts_by_person.values())
     sent = query.get("sent", [""])[0]
-    updated = query.get("updated", ["0"])[0]
     skipped = query.get("skipped", [""])[0]
     sent_html = ""
     if sent:
-        sent_html = (
-            f'<div class="alert info">Agenda enregistré pour {html.escape(sent)} compte(s), '
-            f'dont {html.escape(updated)} version(s) remplacée(s). Ignoré: {html.escape(skipped or "0")}.</div>'
-        )
+        sent_html = f'<div class="alert info">Agenda envoyé à {html.escape(sent)} enfant(s). Sans compte enfant: {html.escape(skipped or "0")}.</div>'
     body = f"""
-    <style>
-      {AGENDA_TEMPLATE_CSS}
-      .agenda-child-avatar {{ display:none; }}
-      @media (max-width:720px) {{
-        body.staff-mobile-nav .agenda-editors {{ gap:5px !important; }}
-        body.staff-mobile-nav .agenda-editor summary {{ padding:6px 8px; gap:5px; line-height:1.1; }}
-        body.staff-mobile-nav .agenda-child-heading {{ min-width:0; display:flex; align-items:center; gap:6px; }}
-        body.staff-mobile-nav .agenda-child-avatar {{ display:inline-flex; width:28px; height:28px; flex:0 0 28px; border-radius:50%; object-fit:cover; align-items:center; justify-content:center; border:1px solid #c8dce8; background:#e8f4fb; color:#25638f; font-size:12px; font-weight:800; }}
-      }}
-    </style>
     {sent_html}
     <div class="panel">
       <h2>AGENDA</h2>
-
       <form method="get" action="/agenda" class="toolbar">
         <div>
           <label>Groupe</label>
@@ -8878,10 +6287,13 @@ def render_staff_agenda(user, query):
       <form method="post" action="/agenda/send" class="grid" style="gap:10px">
         <input type="hidden" name="class_name" value="{html.escape(selected_class)}">
         <input type="hidden" name="day_text" value="{html.escape(selected_day)}">
-        <div class="grid agenda-editors" style="gap:10px">
-          {''.join(agenda_rows) or '<div class="muted-box">Aucun enfant présent ou déjà enregistré pour cette date.</div>'}
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th style="width:170px">Enfant</th><th>Contenu</th></tr></thead>
+            <tbody>{''.join(agenda_rows) or '<tr><td colspan="2" class="muted">Aucun enfant présent.</td></tr>'}</tbody>
+          </table>
         </div>
-        <div><button class="btn primary" type="submit" {"disabled" if not sendable_count else ""}>Enregistrer / renvoyer les agendas</button></div>
+        <div><button class="btn primary" type="submit" {"disabled" if not sendable_count else ""}>Envoyer aux agendas des enfants</button></div>
       </form>
       </div>
     <div class="panel" style="margin-top:16px">
@@ -8893,34 +6305,6 @@ def render_staff_agenda(user, query):
         </table>
       </div>
     </div>
-    <script>
-    (() => {{
-      document.querySelectorAll('details[data-agenda-reply-entry-id]').forEach((details) => {{
-        details.addEventListener('toggle', async () => {{
-          if (!details.open || details.dataset.agendaReplyPending === '1') return;
-          const entryId = Number(details.dataset.agendaReplyEntryId || 0);
-          if (!entryId) return;
-          details.dataset.agendaReplyPending = '1';
-          try {{
-            const response = await fetch('/api/agenda/communication-read', {{
-              method: 'POST',
-              headers: {{'Content-Type': 'application/json'}},
-              body: JSON.stringify({{entry_id: entryId}}),
-            }});
-            if (!response.ok) return;
-            const result = await response.json();
-            if (!result.ok) return;
-            details.querySelector('.agenda-parent-reply-dot')?.remove();
-            delete details.dataset.agendaReplyEntryId;
-          }} catch (_error) {{
-            // Keep the dot when the read receipt could not be saved.
-          }} finally {{
-            delete details.dataset.agendaReplyPending;
-          }}
-        }});
-      }});
-    }})();
-    </script>
     """
     return html_page("AGENDA", user, body)
 
@@ -9109,7 +6493,7 @@ def render_staff_calendar(user, query):
     planned_chart_html = f"""
       <div class="dashboard-chart staff-calendar-chart">
         <div class="dashboard-chart-head">
-          <div class="dashboard-chart-title">PLANIFIÉS 28 JOURS</div>
+          <div class="dashboard-chart-title">PLANIFIES 28 JOURS</div>
           <div class="dashboard-chart-total">{html.escape(chart_total_text)}</div>
         </div>
         <svg class="arrival-chart" viewBox="0 0 {chart_w} {chart_h}" preserveAspectRatio="none" style="height:190px">
@@ -9213,7 +6597,6 @@ def render_allergic_children(user, query):
     except ValueError:
         selected_date = today_text()
     with connect_db() as conn:
-        project_id = effective_project_id(conn, user)
         classes = classes_for_user(user, conn)
         if selected_class not in classes and selected_class != "all":
             selected_class = classes[0] if classes else "all"
@@ -9230,7 +6613,7 @@ def render_allergic_children(user, query):
                 WHERE web_users.person_id = ? AND web_users.role = 'children'
                   AND web_users.project_id = ?
                 """,
-                (child["id"], project_id),
+                (child["id"], effective_project_id(conn, user)),
             ).fetchone()
             allergies = (profile["allergies"] if profile else "").strip()
             if not allergies:
@@ -9258,18 +6641,15 @@ def render_allergic_children(user, query):
     for row in rows:
         child = row["child"]
         photo_url = child_card_image_url(child["photo_path"])
-        photo_html = f'<img src="{photo_url}" alt="{html.escape(child["name"])}">' if photo_url else '<div class="muted allergic-child-photo-empty">No photo</div>'
-        group_name = child["class_name"] or "Unassigned"
-        group_icon = group_icon_url(project_id, group_name)
-        group_icon_content = f'<img src="{html.escape(group_icon, quote=True)}" alt="">' if group_icon else '<span aria-hidden="true">?</span>'
+        photo_html = f'<img src="{photo_url}" alt="{html.escape(child["name"])}" style="width:64px;height:64px;object-fit:cover;display:block">' if photo_url else '<div class="muted">No photo</div>'
         cards.append(
             f"""
-            <div class="panel allergic-child-card">
-              <span class="allergic-child-group-icon" title="{html.escape(group_name, quote=True)}" aria-label="{html.escape(group_name, quote=True)}">{group_icon_content}</span>
+            <div class="panel" style="padding:12px">
               <div class="selected-child-head present" style="margin-bottom:10px">
-                <div class="photo allergic-child-photo">{photo_html}</div>
-                <div class="allergic-child-summary">
+                <div class="photo" style="width:64px;height:64px;border-radius:8px;overflow:hidden">{photo_html}</div>
+                <div>
                   <div class="selected-child-name">{html.escape(child['name'])}</div>
+                  <div class="small muted">{html.escape(child['class_name'] or 'Unassigned')}</div>
                   <div class="badge present" style="margin-top:6px">Present</div>
                 </div>
               </div>
@@ -9281,18 +6661,6 @@ def render_allergic_children(user, query):
             """
         )
     body = f"""
-    <style>
-      .allergic-child-card {{ position:relative; padding:12px; }}
-      .allergic-child-summary {{ min-width:0; padding-right:28px; }}
-      .allergic-child-photo,
-      .allergic-child-photo img,
-      .allergic-child-photo-empty {{ width:64px !important; height:64px !important; border-radius:50% !important; }}
-      .allergic-child-photo {{ overflow:hidden; }}
-      .allergic-child-photo img {{ object-fit:cover; display:block; }}
-      .allergic-child-photo-empty {{ display:flex; align-items:center; justify-content:center; text-align:center; font-size:10px; }}
-      .allergic-child-group-icon {{ position:absolute; top:24px; right:12px; width:22px; height:22px; display:inline-flex; align-items:center; justify-content:center; overflow:hidden; border:1px solid #c8dce8; border-radius:50%; background:#e8f4fb; color:#25638f; font-size:9px; font-weight:800; }}
-      .allergic-child-group-icon img {{ width:100%; height:100%; object-fit:contain; border-radius:50%; }}
-    </style>
     <div class="panel">
       <h2>ENFANTS ALLERGIQUES</h2>
       <form method="get" action="/allergic-children" class="toolbar">
@@ -9341,7 +6709,7 @@ def render_teacher_mobile_dashboard(user):
         body = """
         <div class="panel" style="max-width:560px;margin:0 auto">
           <div class="alert warn">Ce compte n'est pas lié à une fiche employé.</div>
-          <div class="muted-box">Dans la gestion des utilisateurs, renseignez l’identifiant de personne liée correspondant à cette personne dans la liste PERSONNES/éducatrices.</div>
+          <div class="muted-box">Dans User Management, renseignez le Linked person ID correspondant à cette personne dans la liste PEOPLE/teachers.</div>
         </div>
         """
         return html_page("Présence", user, body)
@@ -9349,8 +6717,8 @@ def render_teacher_mobile_dashboard(user):
     status_text = "Present" if is_present else "Sorti"
     status_class = "present" if is_present else "out"
     last_text = status["last_event_time"] if status and status.get("last_event_time") else "-"
-    schedule_in_picker = time_picker_html("schedule_in", schedule["schedule_in"], element_id="mobile-schedule-in", css_class="mobile-schedule-value", popup=True)
-    schedule_out_picker = time_picker_html("schedule_out", schedule["schedule_out"], element_id="mobile-schedule-out", css_class="mobile-schedule-value", popup=True)
+    schedule_in_picker = time_picker_html("schedule_in", schedule["schedule_in"], element_id="mobile-schedule-in", css_class="mobile-schedule-value")
+    schedule_out_picker = time_picker_html("schedule_out", schedule["schedule_out"], element_id="mobile-schedule-out", css_class="mobile-schedule-value")
     location_warning = "" if location_policy.get("configured") else '<div class="alert warn">Le lieu de travail mobile n\'est pas encore configuré.</div>'
     face_warning = "" if has_reference_faces else '<div class="alert warn">Aucune photo de référence. Enregistrez le visage avant la première présence.</div>'
     enroll_face_full = reference_face_count >= 5
@@ -9369,7 +6737,7 @@ def render_teacher_mobile_dashboard(user):
       .teacher-camera {{ width:220px; height:220px; display:block; border:0; border-radius:999px; object-fit:cover; transform:scale(1.4); transform-origin:center; }}
       .teacher-canvas {{ display:none; }}
       .teacher-actions {{ display:flex; flex-wrap:wrap; justify-content:center; align-items:center; gap:8px; }}
-      .teacher-actions .btn {{ width:152px; min-width:152px; height:52px; min-height:52px; font-size:15px; line-height:1; padding:8px 16px; border-radius:999px; white-space:nowrap; justify-content:center; }}
+      .teacher-actions .btn {{ width:auto; min-width:0; min-height:36px; font-size:15px; line-height:1; padding:6px 10px; border-radius:6px; white-space:nowrap; }}
       .teacher-actions .btn.depart:not(:disabled) {{ background:var(--blue); color:#fff; border-color:#236fa8; }}
       #enroll-face-button {{ display:block; width:max-content; max-width:100%; min-height:36px; line-height:1; padding:6px 10px; border-radius:6px; white-space:nowrap; margin-left:auto; margin-right:auto; }}
       .teacher-actions .btn:disabled {{ background:#edf1f5 !important; color:#9aa7b6 !important; border-color:#dbe3ec !important; cursor:not-allowed; box-shadow:none; }}
@@ -9377,13 +6745,6 @@ def render_teacher_mobile_dashboard(user):
       .teacher-schedule-grid {{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:12px; }}
       .time-picker {{ display:flex; align-items:center; gap:4px; }}
       .time-picker select {{ min-height:44px; width:100%; font-size:16px; padding:7px 8px; }}
-      .teacher-schedule-grid .popup-time-picker {{ min-width:0; position:relative; }}
-      .teacher-schedule-grid .time-picker-display {{ width:100%; min-height:44px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--text); font:inherit; font-size:16px; font-weight:800; cursor:pointer; }}
-      .teacher-schedule-grid .time-picker-display:hover, .teacher-schedule-grid .time-picker-display[aria-expanded="true"] {{ border-color:var(--blue); background:#eef7ff; }}
-      .teacher-schedule-grid .time-picker-display:focus-visible {{ outline:3px solid rgba(37, 125, 190, .22); outline-offset:2px; }}
-      .teacher-schedule-grid .time-picker-popup {{ position:fixed; z-index:10050; display:flex; align-items:center; gap:5px; padding:9px; border:1px solid #b8c9d8; border-radius:9px; background:#fff; box-shadow:0 12px 30px rgba(25, 48, 72, .22); }}
-      .teacher-schedule-grid .time-picker-popup[hidden] {{ display:none; }}
-      .teacher-schedule-grid .time-picker-popup select {{ width:64px; min-height:44px; font-size:16px; }}
       .teacher-log {{ white-space:pre-wrap; overflow-wrap:anywhere; }}
       .teacher-log.success {{ background:#e6f7ed; border-color:#bce6cf; color:#135c36; font-weight:700; }}
       .teacher-log.error {{ background:#fff0f0; border-color:#f5b0b0; color:#921919; font-weight:700; }}
@@ -9435,7 +6796,6 @@ def render_teacher_mobile_dashboard(user):
       const scheduleInInput = document.getElementById('mobile-schedule-in');
       const scheduleOutInput = document.getElementById('mobile-schedule-out');
       const mobileUserRole = "{html.escape(user['role'])}";
-      let currentPresenceState = {str(is_present).lower()};
       let faceEnrollmentComplete = {str(enroll_face_full).lower()};
       let streamStarted = false;
       let cameraStream = null;
@@ -9453,11 +6813,9 @@ def render_teacher_mobile_dashboard(user):
         if (level) message.classList.add(level);
       }}
       function setPresenceState(isIn) {{
-        currentPresenceState = !!isIn;
         if (checkinButton) checkinButton.disabled = !!isIn;
         if (checkoutButton) checkoutButton.disabled = !isIn;
         if (statusText) {{
-          statusText.textContent = isIn ? 'Present' : 'Sorti';
           statusText.classList.toggle('present', !!isIn);
           statusText.classList.toggle('out', !isIn);
         }}
@@ -9488,13 +6846,7 @@ def render_teacher_mobile_dashboard(user):
         idleTimer = window.setTimeout(closePresenceWindow, 90000);
       }}
       async function startCamera() {{
-        const liveTrack = cameraStream && cameraStream.getVideoTracks().find(function(track) {{ return track.readyState === 'live'; }});
-        if (streamStarted && liveTrack) {{
-          if (video.srcObject !== cameraStream) video.srcObject = cameraStream;
-          await video.play();
-          return;
-        }}
-        stopCamera();
+        if (streamStarted) return;
         if (!window.isSecureContext && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {{
           throw new Error('Camera requires HTTPS. Open this page with a secure https address or use the native mobile app.');
         }}
@@ -9503,32 +6855,7 @@ def render_teacher_mobile_dashboard(user):
         }}
         cameraStream = await navigator.mediaDevices.getUserMedia({{ video: {{ facingMode: 'user' }}, audio: false }});
         video.srcObject = cameraStream;
-        await video.play();
         streamStarted = true;
-      }}
-
-      async function fetchWithTimeout(url, options, timeoutMs) {{
-        const controller = new AbortController();
-        const timer = window.setTimeout(function() {{ controller.abort(); }}, timeoutMs || 30000);
-        try {{
-          return await fetch(url, Object.assign({{}}, options || {{}}, {{ signal: controller.signal }}));
-        }} catch (error) {{
-          if (error && error.name === 'AbortError') throw new Error('La vérification prend trop de temps. Veuillez réessayer.');
-          throw error;
-        }} finally {{
-          window.clearTimeout(timer);
-        }}
-      }}
-
-      async function recoverCameraPreview() {{
-        if (presenceClosed || document.hidden) return;
-        try {{
-          await startCamera();
-          await waitForVideoReady();
-        }} catch (cameraError) {{
-          stopCamera();
-          throw cameraError;
-        }}
       }}
       function getPosition() {{
         return new Promise(function(resolve, reject) {{
@@ -9579,60 +6906,13 @@ def render_teacher_mobile_dashboard(user):
         hidden.dispatchEvent(new Event('input', {{ bubbles: true }}));
         hidden.dispatchEvent(new Event('change', {{ bubbles: true }}));
       }}
-      let openScheduleTimePicker = null;
-      function closeScheduleTimePicker() {{
-        if (!openScheduleTimePicker) return;
-        const popup = openScheduleTimePicker.querySelector('.time-picker-popup');
-        const display = openScheduleTimePicker.querySelector('.time-picker-display');
-        if (popup) popup.hidden = true;
-        if (display) display.setAttribute('aria-expanded', 'false');
-        openScheduleTimePicker = null;
-      }}
       document.querySelectorAll('.split-time-picker').forEach(function(picker) {{
         const hour = picker.querySelector('.time-picker-hour');
         const minute = picker.querySelector('.time-picker-minute');
-        const display = picker.querySelector('.time-picker-display');
-        const popup = picker.querySelector('.time-picker-popup');
-        function updatePicker() {{
-          syncTimePicker(picker);
-          const hidden = picker.querySelector('.time-picker-value');
-          if (display) display.textContent = hidden && hidden.value ? hidden.value : '--:--';
-        }}
-        function positionPopup() {{
-          if (!display || !popup || popup.hidden) return;
-          const rect = display.getBoundingClientRect();
-          const popupWidth = popup.offsetWidth || 156;
-          const popupHeight = popup.offsetHeight || 64;
-          let left = Math.min(rect.left, window.innerWidth - popupWidth - 8);
-          let top = rect.bottom + 6;
-          if (top + popupHeight > window.innerHeight - 8) top = Math.max(8, rect.top - popupHeight - 6);
-          popup.style.left = Math.max(8, left) + 'px';
-          popup.style.top = top + 'px';
-        }}
-        if (hour) hour.addEventListener('change', updatePicker);
-        if (minute) minute.addEventListener('change', function() {{
-          updatePicker();
-          if (hour && hour.value && minute.value) closeScheduleTimePicker();
-        }});
-        if (display && popup) {{
-          display.addEventListener('click', function(event) {{
-            event.stopPropagation();
-            const willOpen = popup.hidden;
-            closeScheduleTimePicker();
-            if (!willOpen) return;
-            popup.hidden = false;
-            display.setAttribute('aria-expanded', 'true');
-            openScheduleTimePicker = picker;
-            window.requestAnimationFrame(positionPopup);
-          }});
-          popup.addEventListener('click', function(event) {{ event.stopPropagation(); }});
-        }}
-        updatePicker();
+        if (hour) hour.addEventListener('change', function() {{ syncTimePicker(picker); }});
+        if (minute) minute.addEventListener('change', function() {{ syncTimePicker(picker); }});
+        syncTimePicker(picker);
       }});
-      document.addEventListener('click', closeScheduleTimePicker);
-      document.addEventListener('keydown', function(event) {{ if (event.key === 'Escape') closeScheduleTimePicker(); }});
-      window.addEventListener('resize', closeScheduleTimePicker);
-      window.addEventListener('scroll', closeScheduleTimePicker);
       async function saveSchedule() {{
         const scheduleIn = scheduleInInput ? scheduleInInput.value : '';
         const scheduleOut = scheduleOutInput ? scheduleOutInput.value : '';
@@ -9640,7 +6920,6 @@ def render_teacher_mobile_dashboard(user):
           setMessage('SCHEDULE IN et SCHEDULE OUT sont requis.', 'error');
           return;
         }}
-        if (!window.confirm('Confirmer l’enregistrement du schedule ?')) return false;
         setMessage('Sauvegarde du schedule...');
         const response = await fetch('/api/mobile/teacher-schedule', {{
           method: 'POST',
@@ -9660,13 +6939,13 @@ def render_teacher_mobile_dashboard(user):
         }}
         if (!response.ok || data.ok === false) throw new Error(data.error || 'Erreur');
         setMessage('Schedule sauvegardé.', 'success');
-        return true;
       }}
       async function saveScheduleIfComplete() {{
         const scheduleIn = scheduleInInput ? scheduleInInput.value : '';
         const scheduleOut = scheduleOutInput ? scheduleOutInput.value : '';
         if (!scheduleIn || !scheduleOut) return false;
-        return await saveSchedule();
+        await saveSchedule();
+        return true;
       }}
       function confirmMissingScheduleForCheckin(eventType) {{
         if (eventType !== 'checkin' || mobileUserRole === 'principal' || mobileUserRole === 'cook') return true;
@@ -9676,20 +6955,14 @@ def render_teacher_mobile_dashboard(user):
         return window.confirm('SCHEDULE IN et SCHEDULE OUT ne sont pas remplis. Continuer la signature sans schedule ?');
       }}
       async function submitAttendance(eventType, button) {{
-        const currentlyIn = currentPresenceState;
-        if (eventType === 'checkin' && currentlyIn) {{
-          setMessage('Cet employé est déjà présent. Utilisez Départ visage.', 'error');
-          setPresenceState(true);
-          return;
-        }}
-        if (eventType === 'checkout' && !currentlyIn) {{
-          setMessage('Cet employé est déjà sorti. Utilisez Arrivée visage.', 'error');
-          setPresenceState(false);
+        const currentlyIn = statusText.textContent.trim() === 'Present';
+        if ((eventType === 'checkin' && currentlyIn) || (eventType === 'checkout' && !currentlyIn)) {{
+          setPresenceState(currentlyIn);
           return;
         }}
         if (!confirmMissingScheduleForCheckin(eventType)) return;
         try {{
-          if (!await saveScheduleIfComplete()) return;
+          await saveScheduleIfComplete();
         }} catch (error) {{
           setMessage(error.message || 'Erreur', 'error');
           return;
@@ -9716,8 +6989,6 @@ def render_teacher_mobile_dashboard(user):
           }}
           return;
         }}
-        const attendanceLabel = eventType === 'checkin' ? 'l’arrivée' : 'le départ';
-        if (!window.confirm('Confirmer l’enregistrement de ' + attendanceLabel + ' ?')) return;
         button.disabled = true;
         setMessage('Vérification en cours...');
         let submittedPresenceState = null;
@@ -9726,7 +6997,7 @@ def render_teacher_mobile_dashboard(user):
           await waitForVideoReady();
           const position = pendingAttendancePosition || await getPosition();
           const faceImage = captureBase64(0.55, 520);
-          const response = await fetchWithTimeout('/api/mobile/teacher-face-attendance', {{
+          const response = await fetch('/api/mobile/teacher-face-attendance', {{
             method: 'POST',
             credentials: 'same-origin',
             headers: {{ 'Content-Type': 'application/json' }},
@@ -9739,7 +7010,7 @@ def render_teacher_mobile_dashboard(user):
               accuracy_meters: position.coords.accuracy,
               face_image_base64: faceImage
             }})
-          }}, 30000);
+          }});
           const rawText = await response.text();
           let data = null;
           try {{
@@ -9758,8 +7029,9 @@ def render_teacher_mobile_dashboard(user):
           pendingAttendanceButton = null;
           pendingAttendancePosition = null;
           button.textContent = eventType === 'checkin' ? 'Arrivée visage' : 'Départ visage';
+          stopCamera();
           window.setTimeout(function() {{
-            window.location.replace('/teacher-attendance');
+            window.location.href = '/teacher-attendance';
           }}, 450);
         }} catch (error) {{
           pendingAttendanceEvent = null;
@@ -9770,7 +7042,6 @@ def render_teacher_mobile_dashboard(user):
         }} finally {{
           if (submittedPresenceState === null) {{
             button.disabled = false;
-            try {{ await recoverCameraPreview(); }} catch (cameraError) {{ setMessage(cameraError.message || 'Erreur caméra', 'error'); }}
           }} else {{
             setPresenceState(submittedPresenceState);
           }}
@@ -9779,7 +7050,6 @@ def render_teacher_mobile_dashboard(user):
       async function enrollFace(button) {{
         if (faceEnrollmentComplete) return;
         if (!enrollMode) {{
-          if (!window.confirm('Confirmer l’enregistrement du visage ?')) return;
           enrollMode = true;
           enrollImages = [];
           enrollCount = 0;
@@ -9804,7 +7074,7 @@ def render_teacher_mobile_dashboard(user):
           const image = captureBase64(0.42, 360);
           button.textContent = 'Envoi photo ' + (enrollCount + 1) + ' / 5...';
           setMessage('Envoi photo ' + (enrollCount + 1) + ' / 5...');
-          const response = await fetchWithTimeout('/api/mobile/enroll-face', {{
+          const response = await fetch('/api/mobile/enroll-face', {{
             method: 'POST',
             credentials: 'same-origin',
             headers: {{ 'Content-Type': 'application/json' }},
@@ -9813,7 +7083,7 @@ def render_teacher_mobile_dashboard(user):
               device_name: navigator.userAgent || 'Mobile browser',
               face_images_base64: [image]
             }})
-          }}, 30000);
+          }});
           const rawText = await response.text();
           let data = null;
           try {{
@@ -9845,7 +7115,6 @@ def render_teacher_mobile_dashboard(user):
           setMessage(error.message || 'Erreur', 'error');
         }} finally {{
           if (!faceEnrollmentComplete) button.disabled = false;
-          try {{ await recoverCameraPreview(); }} catch (cameraError) {{ setMessage(cameraError.message || 'Erreur caméra', 'error'); }}
         }}
       }}
       document.querySelectorAll('[data-event-type]').forEach(function(button) {{
@@ -9867,7 +7136,7 @@ def render_teacher_mobile_dashboard(user):
       }});
       window.addEventListener('pagehide', stopCamera);
       resetIdleTimer();
-      setPresenceState(currentPresenceState);
+      setPresenceState(statusText && statusText.textContent.trim() === 'Present');
       startCamera().then(function() {{ setMessage(''); }}).catch(function(error) {{ setMessage(error.message, 'error'); }});
     }})();
     </script>
@@ -9962,18 +7231,11 @@ def render_owner_initialization_prompt(user, child_count):
     </script>
     """
 
-def render_dashboard(user, query, mobile_request=False):
-    perf_started = time.perf_counter()
-    perf_marks = []
-
-    def mark_perf(label):
-        perf_marks.append((label, time.perf_counter()))
-
+def render_dashboard(user, query):
     with connect_db() as conn:
-        project_id = effective_project_id(conn, user)
         project_child_count = conn.execute(
             "SELECT COUNT(*) FROM persons WHERE role = 'children' AND project_id = ?",
-            (project_id,),
+            (effective_project_id(conn, user),),
         ).fetchone()[0]
         owner_initialization_html = render_owner_initialization_prompt(user, project_child_count)
         classes = classes_for_user(user, conn)
@@ -9987,7 +7249,6 @@ def render_dashboard(user, query, mobile_request=False):
             selected_class = classes[0] if classes else "all"
         set_last_selected_class(conn, user["id"], selected_class)
         children = get_children(conn, user, selected_class)
-        mark_perf("scope")
         is_child_account = user["role"] == "children"
         show_child_actions = user["role"] != "cook"
         child_can_mark_self = bool(is_child_account and selected_date == today_text() and user["person_id"])
@@ -9995,78 +7256,50 @@ def render_dashboard(user, query, mobile_request=False):
             children = sorted(children, key=lambda child: ((child["name"] or "").casefold(), (child["class_name"] or "").casefold()))
         else:
             children = sorted(children, key=lambda child: ((child["class_name"] or "Unassigned").casefold(), (child["name"] or "").casefold()))
+        if children and (not selected_child_id or not any(str(child["id"]) == selected_child_id for child in children)):
+            selected_child_id = str(children[0]["id"])
         selected_child = None
-        if selected_child_id:
-            for child in children:
-                if str(child["id"]) == selected_child_id:
-                    selected_child = child
-                    break
-        if selected_child is None:
-            selected_child_id = ""
-        child_statuses = child_status_map(conn, children, selected_date)
-        statistics_children = [child for child in children if not is_test_group_name(child["class_name"])]
-        counts = count_mapped_statuses(statistics_children, child_statuses)
+        for child in children:
+            if str(child["id"]) == selected_child_id:
+                selected_child = child
+                break
+        if selected_child is None and children:
+            selected_child = children[0]
+            selected_child_id = str(selected_child["id"])
+        counts = count_statuses(conn, children, selected_date)
         version = dashboard_version(conn, children, selected_date)
-        mark_perf("attendance")
         present_count = counts["P"]
         absent_count = counts["A"]
         closed_count = counts["F"]
-        total = len(statistics_children)
+        total = len(children)
         staff_compact_dashboard = user["role"] not in {"boss", "children"}
-        defer_arrival_chart = user["role"] in {"boss", "principal"} and not mobile_request
-        arrival_chart_html = "" if not defer_arrival_chart else """
-          <div id="dashboard-arrival-chart" class="dashboard-charts" aria-live="polite" aria-busy="true">
-            <div class="dashboard-chart"><div class="muted">Chargement des tendances...</div></div>
-            <div class="dashboard-chart"><div class="muted">Chargement des tendances...</div></div>
-          </div>
-        """
+        arrival_chart_html = "" if is_child_account else render_dashboard_arrival_chart(conn, children, selected_date)
         summary_rows = []
-        if user["role"] == "boss":
-            by_class = {}
-            for child in statistics_children:
-                by_class.setdefault(child["class_name"] or "Unassigned", []).append(child)
-            for class_name in sorted(by_class):
-                class_children = by_class[class_name]
-                class_counts = count_mapped_statuses(class_children, child_statuses)
-                summary_rows.append((class_name, len(class_children), class_counts["P"], class_counts["A"], class_counts["F"]))
+        by_class = {}
+        for child in children:
+            by_class.setdefault(child["class_name"] or "Unassigned", []).append(child)
+        for class_name in sorted(by_class):
+            class_children = by_class[class_name]
+            class_counts = count_statuses(conn, class_children, selected_date)
+            summary_rows.append((class_name, len(class_children), class_counts["P"], class_counts["A"], class_counts["F"]))
         cards = []
         for child in children:
-            status = child_statuses.get(int(child["id"]), "A")
+            status = current_child_status(conn, child["id"], selected_date)
             status_class = {"P": "present", "A": "absent", "F": "closed"}.get(status, "absent")
             photo_url = child_card_image_url(child["photo_path"])
-            image_html = f'<img src="{photo_url}" alt="{html.escape(child["name"])}" loading="lazy" decoding="async">' if photo_url else '<div class="muted">No photo</div>'
-            child_group_name = child["class_name"] or "Unassigned"
-            child_group_html = f'<div class="class-tag">{html.escape(child_group_name)}</div>'
-            if staff_compact_dashboard:
-                child_group_icon_url = group_icon_url(project_id, child_group_name)
-                child_group_icon_content = (
-                    f'<img src="{html.escape(child_group_icon_url, quote=True)}" alt="">'
-                    if child_group_icon_url else '<span aria-hidden="true">?</span>'
-                )
-                child_group_html = (
-                    f'<span class="staff-card-group-icon" title="{html.escape(child_group_name, quote=True)}" '
-                    f'aria-label="{html.escape(child_group_name, quote=True)}">{child_group_icon_content}</span>'
-                )
+            image_html = f'<img src="{photo_url}" alt="{html.escape(child["name"])}">' if photo_url else '<div class="muted">No photo</div>'
             card_href = f"/dashboard?class={quote(selected_class)}&date={quote(selected_date)}&sort={quote(selected_sort)}"
             selected_class_marker = "selected" if show_child_actions and str(child["id"]) == selected_child_id else ""
-            card_data_attrs = ""
             if show_child_actions:
                 card_href = f"{card_href}&child_id={child['id']}#selected-child-actions"
-                card_data_attrs = (
-                    f' data-dashboard-child-id="{child["id"]}"'
-                    f' data-dashboard-child-name="{html.escape(child["name"] or "", quote=True)}"'
-                    f' data-dashboard-child-class="{html.escape(child_group_name, quote=True)}"'
-                    f' data-dashboard-child-status="{status}"'
-                    f' data-dashboard-child-photo="{html.escape(photo_url or "", quote=True)}"'
-                )
             cards.append(
                 f"""
-                <a class="card-link" href="{card_href}"{card_data_attrs}>
+                <a class="card-link" href="{card_href}">
                   <div class="card {status_class} {selected_class_marker}">
                     <div class="photo">{image_html}</div>
                     <div class="content">
                       <div class="name">{html.escape(child['name'])}</div>
-                      {child_group_html}
+                      <div class="class-tag">{html.escape(child['class_name'] or 'Unassigned')}</div>
                       <div class="badge {status_class}">{status_label(status)}</div>
                       <div class="small muted">{html.escape(selected_date)}</div>
                     </div>
@@ -10074,23 +7307,10 @@ def render_dashboard(user, query, mobile_request=False):
                 </a>
                 """
             )
-        summary_html_parts = []
-        for name, total_count, p, a, fcount in summary_rows:
-            group_label_html = html.escape(name)
-            if staff_compact_dashboard:
-                icon_url = group_icon_url(project_id, name)
-                icon_content = (
-                    f'<img src="{html.escape(icon_url, quote=True)}" alt="">'
-                    if icon_url else '<span aria-hidden="true">?</span>'
-                )
-                group_label_html = (
-                    f'<span class="staff-group-icon" title="{html.escape(name, quote=True)}" '
-                    f'aria-label="{html.escape(name, quote=True)}">{icon_content}</span>'
-                )
-            summary_html_parts.append(
-                f"<tr><td>{group_label_html}</td><td>{total_count}</td><td>{p}</td><td>{a}</td><td>{fcount}</td></tr>"
-            )
-        summary_html = "".join(summary_html_parts)
+        summary_html = "".join(
+            f"<tr><td>{html.escape(name)}</td><td>{total_count}</td><td>{p}</td><td>{a}</td><td>{fcount}</td></tr>"
+            for name, total_count, p, a, fcount in summary_rows
+        )
         class_summary_body_html = summary_html or '<tr><td colspan="5" class="muted">No data</td></tr>'
         if staff_compact_dashboard:
             total_summary_html = f"<tr class=\"summary-total\"><td>Total</td><td>{total}</td><td>{present_count}</td><td>{absent_count}</td><td>{closed_count}</td></tr>"
@@ -10099,7 +7319,7 @@ def render_dashboard(user, query, mobile_request=False):
             f'<span class="count-chip">{html.escape(name)}: {total_count}</span>'
             for name, total_count, _p, _a, _fcount in summary_rows
         )
-        class_count_html = f'<div class="count-strip"><span class="count-chip strong">Toute : {total}</span>{class_count_items}</div>'
+        class_count_html = f'<div class="count-strip"><span class="count-chip strong">Toute: {total}</span>{class_count_items}</div>'
         control_options = "".join(
             f'<option value="{html.escape(cls)}" {"selected" if cls == selected_class else ""}>{"Toute" if cls == "all" else html.escape(cls)}</option>'
             for cls in (["all"] + classes)
@@ -10126,7 +7346,7 @@ def render_dashboard(user, query, mobile_request=False):
         )
         selected_name = html.escape(selected_child["name"]) if selected_child else "No child selected"
         selected_class_name = html.escape(selected_child["class_name"] or "Unassigned") if selected_child else ""
-        selected_status = child_statuses.get(int(selected_child["id"]), "A") if selected_child else "A"
+        selected_status = current_child_status(conn, selected_child["id"], selected_date) if selected_child else "A"
         can_mark_selected = can_edit_child(user) or child_can_mark_self
         checkin_disabled = selected_status == "P" or selected_status == "F" or not can_mark_selected or not selected_child
         checkout_disabled = selected_status == "A" or selected_status == "F" or not can_mark_selected or not selected_child
@@ -10143,22 +7363,22 @@ def render_dashboard(user, query, mobile_request=False):
             checkout_label = "Fermé"
         action_disabled_note = "" if can_mark_selected else '<div class="small muted">Editing is not allowed for this account.</div>'
         clear_day_html = ""
-        if user["role"] == "boss":
+        if user["role"] in {"principal", "boss"}:
             clear_day_html = f"""
-                <form method="post" action="/child/{selected_child['id'] if selected_child else 0}/delete-day" onsubmit="return confirm('Clear attendance for this child and date?')" style="display:inline">
+                <form method="post" action="/child/{selected_child['id'] if selected_child else 0}/delete-day" onsubmit="return confirm('Clear attendance for {selected_name} on {html.escape(selected_date)} ?')" style="display:inline">
                   <input type="hidden" name="date" value="{html.escape(selected_date)}">
                   <button class="btn red" type="submit">Effacer la journée</button>
                 </form>
             """
         selected_recent_rows = ""
-        selected_photo_url = child_card_image_url(selected_child["photo_path"]) if selected_child else ""
-        defer_selected_recent = bool(selected_child and user["role"] == "boss" and mobile_request)
-        if selected_child and user["role"] == "boss" and not defer_selected_recent:
+        selected_photo_url = ""
+        if selected_child and user["role"] == "boss":
             selected_recent = latest_attendance_rows(conn, selected_child["id"], 10)
             selected_recent_rows = "".join(
                 f"<tr><td>{html.escape(r['timestamp'])}</td><td>{html.escape(r['event_type'])}</td><td>{html.escape(r['actor_name'] or 'System')}</td></tr>"
                 for r in selected_recent
             )
+            selected_photo_url = child_card_image_url(selected_child["photo_path"]) or ""
         selected_status_class = {"P": "present", "A": "absent", "F": "closed"}.get(selected_status, "absent")
         admin_tools_html = ""
         children_panel_html = "" if is_child_account else f"""
@@ -10166,80 +7386,39 @@ def render_dashboard(user, query, mobile_request=False):
             <div class="cards">{''.join(cards) if cards else '<div class="muted">No children found for this scope.</div>'}</div>
           </div>
         """
-        selected_recent_loading_row = '<tr><td colspan="3" class="muted">Chargement...</td></tr>' if defer_selected_recent else '<tr><td colspan="3" class="muted">No records</td></tr>'
-        selected_recent_tbody_attrs = (
-            f' id="dashboard-recent-attendance" data-child-id="{selected_child["id"]}"'
-            if defer_selected_recent else ""
-        )
-        selected_recent_loader = "" if not defer_selected_recent else """
-              <script>
-              (function() {
-                const tbody = document.getElementById('dashboard-recent-attendance');
-                if (!tbody) return;
-                const childId = tbody.dataset.childId || '';
-                fetch('/api/dashboard/child-recent?child_id=' + encodeURIComponent(childId), {
-                  headers: {'Accept': 'application/json'},
-                  credentials: 'same-origin'
-                })
-                  .then(function(response) {
-                    if (!response.ok) throw new Error('request failed');
-                    return response.json();
-                  })
-                  .then(function(payload) {
-                    const rows = Array.isArray(payload.rows) ? payload.rows : [];
-                    tbody.replaceChildren();
-                    if (!rows.length) {
-                      const row = tbody.insertRow();
-                      const cell = row.insertCell();
-                      cell.colSpan = 3;
-                      cell.className = 'muted';
-                      cell.textContent = 'No records';
-                      return;
-                    }
-                    rows.forEach(function(item) {
-                      const row = tbody.insertRow();
-                      [item.timestamp, item.event_type, item.actor_name].forEach(function(value) {
-                        row.insertCell().textContent = value || '';
-                      });
-                    });
-                  })
-                  .catch(function() {
-                    tbody.replaceChildren();
-                    const row = tbody.insertRow();
-                    const cell = row.insertCell();
-                    cell.colSpan = 3;
-                    cell.className = 'muted';
-                    cell.textContent = 'Impossible de charger les enregistrements.';
-                  });
-              })();
-              </script>
-        """
         selected_recent_html = "" if user["role"] != "boss" else f"""
               <div class="table-wrap">
                 <table>
                   <thead><tr><th>Timestamp</th><th>Event</th><th>By</th></tr></thead>
-                  <tbody{selected_recent_tbody_attrs}>{selected_recent_rows or selected_recent_loading_row}</tbody>
+                  <tbody>{selected_recent_rows or '<tr><td colspan="3" class="muted">No records</td></tr>'}</tbody>
                 </table>
               </div>
-              {selected_recent_loader}
         """
-        if user["role"] == "boss":
-            class_summary_html = f"""
-            <div class="panel">
-              <h3>Groupe</h3>
+        class_summary_panel_class = "panel staff-class-summary" if staff_compact_dashboard else "panel"
+        class_summary_title = "" if staff_compact_dashboard else "<h3>Groupe</h3>"
+        class_summary_first_header = "<th></th>" if staff_compact_dashboard else "<th>Groupe</th>"
+        class_summary_html = "" if is_child_account else f"""
+            <div class="{class_summary_panel_class}">
+              {class_summary_title}
               <div class="table-wrap">
                 <table>
-                  <thead><tr><th>Groupe</th><th>Toute</th><th>P</th><th>A</th><th>F</th></tr></thead>
+                  <thead><tr>{class_summary_first_header}<th>Toute</th><th>P</th><th>A</th><th>F</th></tr></thead>
                   <tbody>{class_summary_body_html}</tbody>
                 </table>
               </div>
             </div>
-            """
-        else:
+        """
+        if staff_compact_dashboard:
+            children_panel_html = f"""
+          <div class="panel">
+            {class_summary_html}
+            <div class="cards">{''.join(cards) if cards else '<div class="muted">No children found for this scope.</div>'}</div>
+          </div>
+        """
             class_summary_html = ""
-        dashboard_grid_class = "grid two-col" if user["role"] == "boss" else "grid"
-        if user["role"] == "boss":
-            export_url = f"/export.xlsx?class={quote(selected_class)}&date={quote(selected_date)}"
+        dashboard_grid_class = "grid" if is_child_account else "grid two-col"
+        if user["role"] in {"principal", "boss"}:
+            export_url = "/export.xlsx"
             admin_tools_html = f"""
             <div class="panel">
               <div class="btn-row">
@@ -10247,12 +7426,6 @@ def render_dashboard(user, query, mobile_request=False):
               </div>
             </div>
             """
-        dashboard_side_html = "" if user["role"] != "boss" else f"""
-            <div class="grid dashboard-side" style="gap:16px">
-              {class_summary_html}
-              {admin_tools_html}
-            </div>
-        """
         dashboard_overview_panel_html = "" if is_child_account else f"""
         <div class="panel">
           <h2 class="dashboard-tableau-title">Tableau</h2>
@@ -10284,248 +7457,19 @@ def render_dashboard(user, query, mobile_request=False):
         if user["role"] == "cook":
             dashboard_root_classes.append("cook-dashboard")
         dashboard_root_class = " ".join(dashboard_root_classes)
-        selected_child_close_url = (
-            f"/dashboard?class={quote(selected_class)}&date={quote(selected_date)}&sort={quote(selected_sort)}"
-        )
-        selected_child_modal_html = ""
-        if selected_child and show_child_actions:
-            selected_child_modal_html = f"""
-            <div class="child-detail-overlay" role="dialog" aria-modal="true" aria-labelledby="selected-child-title">
-              <a class="child-detail-backdrop" href="{html.escape(selected_child_close_url, quote=True)}" aria-label="Fermer"></a>
-              <div class="panel selected-child-panel" id="selected-child-actions">
-                <a class="child-detail-close" href="{html.escape(selected_child_close_url, quote=True)}" aria-label="Fermer">&times;</a>
-                <h3 id="selected-child-title">Enfant</h3>
-                <div class="selected-child-head {selected_status_class}">
-                  {f'<img src="{selected_photo_url}" alt="{selected_name}">' if selected_photo_url else '<div class="muted">No photo</div>'}
-                  <div>
-                    <div class="selected-child-name">{selected_name}</div>
-                    <div class="small muted">{selected_class_name}</div>
-                    <div class="badge {selected_status_class}">{status_label(selected_status)}</div>
-                  </div>
-                </div>
-                <div class="action-buttons" style="margin-bottom:10px">
-                  <form method="post" action="/child/{selected_child['id']}/event" onsubmit="return confirm('Confirm check-in?')" style="display:inline">
-                    <input type="hidden" name="date" value="{html.escape(selected_date)}">
-                    <input type="hidden" name="event_type" value="checkin">
-                    <button class="btn {checkin_class}" type="submit" {"disabled" if checkin_disabled else ""}>{checkin_label}</button>
-                  </form>
-                  <form method="post" action="/child/{selected_child['id']}/event" onsubmit="return confirm('Confirm check-out?')" style="display:inline">
-                    <input type="hidden" name="date" value="{html.escape(selected_date)}">
-                    <input type="hidden" name="event_type" value="checkout">
-                    <button class="btn {checkout_class}" type="submit" {"disabled" if checkout_disabled else ""}>{checkout_label}</button>
-                  </form>
-                  {clear_day_html}
-                </div>
-                {action_disabled_note}
-                {selected_recent_html}
-              </div>
-            </div>
-            """
-        elif show_child_actions:
-            client_clear_day_html = ""
-            if user["role"] in {"principal", "boss"}:
-                client_clear_day_html = f"""
-                  <form method="post" action="" id="dashboard-child-clear-form" style="display:inline">
-                    <input type="hidden" name="date" value="{html.escape(selected_date)}">
-                    <button class="btn red" id="dashboard-child-clear" type="submit" data-fr="Effacer la journ&eacute;e" data-en="Clear day">Effacer la journ&eacute;e</button>
-                  </form>
-                """
-            client_recent_html = ""
-            if user["role"] == "boss":
-                client_recent_html = """
-                  <div class="table-wrap">
-                    <table>
-                      <thead><tr><th>Timestamp</th><th>Event</th><th>By</th></tr></thead>
-                      <tbody id="dashboard-instant-recent"><tr><td colspan="3" class="muted">Chargement...</td></tr></tbody>
-                    </table>
-                  </div>
-                """
-            selected_child_modal_html = f"""
-            <div class="child-detail-overlay" id="dashboard-instant-child-modal" role="dialog" aria-modal="true" aria-labelledby="dashboard-instant-child-title" hidden>
-              <a class="child-detail-backdrop" href="{html.escape(selected_child_close_url, quote=True)}" data-dashboard-modal-close aria-label="Fermer"></a>
-              <div class="panel selected-child-panel" id="selected-child-actions">
-                <a class="child-detail-close" href="{html.escape(selected_child_close_url, quote=True)}" data-dashboard-modal-close aria-label="Fermer">&times;</a>
-                <h3 id="dashboard-instant-child-title">Enfant</h3>
-                <div class="selected-child-head absent" id="dashboard-instant-child-head">
-                  <img id="dashboard-instant-child-photo" src="" alt="" hidden>
-                  <div class="muted" id="dashboard-instant-child-photo-empty">No photo</div>
-                  <div>
-                    <div class="selected-child-name" id="dashboard-instant-child-name"></div>
-                    <div class="small muted" id="dashboard-instant-child-class"></div>
-                    <div class="badge absent" id="dashboard-instant-child-status"></div>
-                  </div>
-                </div>
-                <div class="action-buttons" style="margin-bottom:10px">
-                  <form method="post" action="" id="dashboard-child-checkin-form" style="display:inline">
-                    <input type="hidden" name="date" value="{html.escape(selected_date)}">
-                    <input type="hidden" name="event_type" value="checkin">
-                    <button class="btn green" id="dashboard-child-checkin" type="submit" data-fr="Arriv&eacute;e" data-en="Arrival">Arriv&eacute;e</button>
-                  </form>
-                  <form method="post" action="" id="dashboard-child-checkout-form" style="display:inline">
-                    <input type="hidden" name="date" value="{html.escape(selected_date)}">
-                    <input type="hidden" name="event_type" value="checkout">
-                    <button class="btn primary" id="dashboard-child-checkout" type="submit" data-fr="D&eacute;part" data-en="Departure">D&eacute;part</button>
-                  </form>
-                  {client_clear_day_html}
-                </div>
-                {client_recent_html}
-              </div>
-            </div>
-            <script>
-            (function() {{
-              const modal = document.getElementById('dashboard-instant-child-modal');
-              if (!modal) return;
-              const head = document.getElementById('dashboard-instant-child-head');
-              const photo = document.getElementById('dashboard-instant-child-photo');
-              const photoEmpty = document.getElementById('dashboard-instant-child-photo-empty');
-              const nameNode = document.getElementById('dashboard-instant-child-name');
-              const classNode = document.getElementById('dashboard-instant-child-class');
-              const statusNode = document.getElementById('dashboard-instant-child-status');
-              const checkinForm = document.getElementById('dashboard-child-checkin-form');
-              const checkoutForm = document.getElementById('dashboard-child-checkout-form');
-              const clearForm = document.getElementById('dashboard-child-clear-form');
-              const checkinButton = document.getElementById('dashboard-child-checkin');
-              const checkoutButton = document.getElementById('dashboard-child-checkout');
-              const clearButton = document.getElementById('dashboard-child-clear');
-              const recentBody = document.getElementById('dashboard-instant-recent');
-              let currentName = '';
-
-              function closeModal(event) {{
-                if (event) event.preventDefault();
-                modal.hidden = true;
-              }}
-
-              function setRecentMessage(message) {{
-                if (!recentBody) return;
-                recentBody.replaceChildren();
-                const row = recentBody.insertRow();
-                const cell = row.insertCell();
-                cell.colSpan = 3;
-                cell.className = 'muted';
-                cell.textContent = message;
-              }}
-
-              function loadRecent(childId) {{
-                if (!recentBody) return;
-                setRecentMessage('Chargement...');
-                fetch('/api/dashboard/child-recent?child_id=' + encodeURIComponent(childId), {{
-                  headers: {{'Accept': 'application/json'}}, credentials: 'same-origin'
-                }})
-                  .then(function(response) {{
-                    if (!response.ok) throw new Error('request failed');
-                    return response.json();
-                  }})
-                  .then(function(payload) {{
-                    const rows = Array.isArray(payload.rows) ? payload.rows : [];
-                    recentBody.replaceChildren();
-                    if (!rows.length) {{ setRecentMessage('No records'); return; }}
-                    rows.forEach(function(item) {{
-                      const row = recentBody.insertRow();
-                      [item.timestamp, item.event_type, item.actor_name].forEach(function(value) {{
-                        row.insertCell().textContent = value || '';
-                      }});
-                    }});
-                  }})
-                  .catch(function() {{ setRecentMessage('Impossible de charger les enregistrements.'); }});
-              }}
-
-              document.querySelectorAll('.card-link[data-dashboard-child-id]').forEach(function(link) {{
-                link.addEventListener('click', function(event) {{
-                  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-                  event.preventDefault();
-                  const childId = link.dataset.dashboardChildId || '';
-                  const childName = link.dataset.dashboardChildName || '';
-                  const childClass = link.dataset.dashboardChildClass || '';
-                  const status = link.dataset.dashboardChildStatus || 'A';
-                  const photoUrl = link.dataset.dashboardChildPhoto || '';
-                  const statusClass = status === 'P' ? 'present' : (status === 'F' ? 'closed' : 'absent');
-                  currentName = childName;
-                  nameNode.textContent = childName;
-                  classNode.textContent = childClass;
-                  let activeLanguage = document.documentElement.lang === 'en' ? 'en' : 'fr';
-                  try {{ activeLanguage = window.localStorage.getItem('pititpas-language') === 'en' ? 'en' : activeLanguage; }} catch (_error) {{}}
-                  const english = activeLanguage === 'en';
-                  statusNode.textContent = status === 'P' ? 'Present' : (status === 'F' ? (english ? 'Closed' : 'Ferm\u00e9') : 'Absent');
-                  head.className = 'selected-child-head ' + statusClass;
-                  statusNode.className = 'badge ' + statusClass;
-                  if (photoUrl) {{
-                    photo.src = photoUrl;
-                    photo.alt = childName;
-                    photo.hidden = false;
-                    photoEmpty.hidden = true;
-                  }} else {{
-                    photo.removeAttribute('src');
-                    photo.hidden = true;
-                    photoEmpty.hidden = false;
-                  }}
-                  const action = '/child/' + encodeURIComponent(childId) + '/event';
-                  checkinForm.action = action;
-                  checkoutForm.action = action;
-                  if (clearForm) clearForm.action = '/child/' + encodeURIComponent(childId) + '/delete-day';
-                  checkinButton.disabled = status === 'P' || status === 'F';
-                  checkoutButton.disabled = status === 'A' || status === 'F';
-                  checkinButton.textContent = status === 'P' ? (english ? 'Already present' : 'D\u00e9j\u00e0 pr\u00e9sent') : (status === 'F' ? (english ? 'Closed' : 'Ferm\u00e9') : (english ? 'Arrival' : 'Arriv\u00e9e'));
-                  checkoutButton.textContent = status === 'A' ? (english ? 'Already checked out' : 'D\u00e9j\u00e0 sorti') : (status === 'F' ? (english ? 'Closed' : 'Ferm\u00e9') : (english ? 'Departure' : 'D\u00e9part'));
-                  if (clearButton) clearButton.textContent = english ? 'Clear day' : 'Effacer la journ\u00e9e';
-                  modal.hidden = false;
-                  loadRecent(childId);
-                }});
-              }});
-              checkinForm.addEventListener('submit', function(event) {{
-                if (!window.confirm('Check in ' + currentName + ' ?')) event.preventDefault();
-              }});
-              checkoutForm.addEventListener('submit', function(event) {{
-                if (!window.confirm('Check out ' + currentName + ' ?')) event.preventDefault();
-              }});
-              if (clearForm) clearForm.addEventListener('submit', function(event) {{
-                if (!window.confirm('Clear attendance for ' + currentName + ' ?')) event.preventDefault();
-              }});
-              modal.querySelectorAll('[data-dashboard-modal-close]').forEach(function(node) {{
-                node.addEventListener('click', closeModal);
-              }});
-              document.addEventListener('keydown', function(event) {{
-                if (event.key === 'Escape' && !modal.hidden) closeModal(event);
-              }});
-            }})();
-            </script>
-            """
         body = f"""
         <style>
         .cook-dashboard .two-col {{ grid-template-columns:1fr; }}
         .cook-dashboard .dashboard-side {{ display:none; }}
         .dashboard-tableau-title {{ display:none; }}
-        .child-detail-overlay[hidden] {{ display:none !important; }}
-        .child-detail-overlay {{ position:fixed; inset:0; z-index:10020; display:grid; place-items:center; padding:16px; }}
-        .child-detail-backdrop {{ position:absolute; inset:0; background:rgba(18,38,52,.48); backdrop-filter:blur(2px); }}
-        .child-detail-overlay .selected-child-panel {{ position:relative; z-index:1; width:min(560px,100%); max-height:calc(100vh - 32px); overflow:auto; margin:0; box-shadow:0 22px 60px rgba(8,27,40,.28); }}
-        .child-detail-close {{ position:absolute; top:8px; right:10px; z-index:2; width:34px; height:34px; display:grid; place-items:center; border-radius:50%; background:#eef4f7; color:#24475d; font-size:26px; line-height:1; text-decoration:none; }}
-        .child-detail-close:hover {{ text-decoration:none; background:#dfeaf0; }}
-        .child-detail-overlay .action-buttons {{ display:grid !important; grid-template-columns:1fr !important; justify-items:center; align-items:center; gap:6px; width:100%; }}
-        .child-detail-overlay .action-buttons form {{ display:flex !important; width:min(190px,100%) !important; min-width:0 !important; justify-content:center !important; }}
-        .child-detail-overlay .action-buttons .btn {{ width:100% !important; min-width:0 !important; height:auto !important; min-height:32px !important; padding:6px 10px !important; border-radius:6px !important; white-space:nowrap !important; justify-content:center !important; }}
         .dashboard-filter-row {{ display:grid; grid-template-columns:auto minmax(0,1fr); gap:8px; align-items:center; }}
         .dashboard-filter-row label {{ margin:0; white-space:nowrap; }}
         .dashboard-filter-row select,
         .dashboard-filter-row input {{ width:100%; min-width:0; }}
-        .staff-compact-dashboard .staff-group-icon {{ width:24px; height:24px; display:inline-flex; align-items:center; justify-content:center; border-radius:50%; overflow:hidden; border:1px solid #c8dce8; background:#e8f4fb; color:#25638f; font-size:10px; font-weight:800; vertical-align:middle; }}
-        .staff-compact-dashboard .staff-group-icon img {{ width:100%; height:100%; object-fit:contain; border-radius:50%; }}
-        .staff-compact-dashboard .card {{ position:relative; }}
-        .staff-compact-dashboard .card .content {{ padding-right:26px; }}
-        .staff-compact-dashboard .staff-card-group-icon {{ position:absolute; top:50%; right:4px; transform:translateY(-50%); width:22px; height:22px; display:inline-flex; align-items:center; justify-content:center; border-radius:50%; overflow:hidden; border:1px solid #c8dce8; background:#e8f4fb; color:#25638f; font-size:9px; font-weight:800; }}
-        .staff-compact-dashboard .staff-card-group-icon img {{ width:100%; height:100%; object-fit:contain; border-radius:50%; }}
-        .staff-compact-dashboard .staff-summary-total {{ width:max-content; display:flex; align-items:center; gap:8px; margin-bottom:3px; padding:2px 5px; border-radius:6px; background:#f4f7f6; font-size:10px; line-height:1.1; }}
-        .staff-compact-dashboard .staff-group-summary-columns {{ display:grid; grid-template-columns:repeat(2,max-content); align-items:start; justify-content:start; gap:8px; }}
-        .staff-compact-dashboard .staff-group-summary-columns > table:nth-child(2) {{ margin-left:28px; }}
         @media (max-width:720px) {{
-          .child-dashboard .selected-child-panel {{ text-align:center; }}
-          .child-dashboard .selected-child-head {{ width:100%; justify-self:center; }}
-          .child-dashboard .action-buttons {{ display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px; justify-items:center; }}
-          .child-dashboard .action-buttons form {{ display:flex !important; justify-content:center; width:100%; }}
-          .child-dashboard .action-buttons .btn {{ width:92px; min-width:92px; height:92px; min-height:92px; padding:8px; border-radius:50%; font-size:13px; line-height:1.1; }}
-          .dashboard-filters {{ grid-template-columns:1fr !important; gap:3px; }}
-          .dashboard-overview .action-panel {{ margin-bottom:4px; }}
-          .dashboard-overview .stats {{ gap:3px; margin-bottom:3px; }}
-          .staff-compact-dashboard .dashboard-overview .stats {{ display:none !important; }}
+          .dashboard-filters {{ grid-template-columns:1fr !important; gap:6px; }}
+          .staff-compact-dashboard .dashboard-overview .stats,
+          .staff-compact-dashboard .dashboard-overview .dashboard-charts {{ display:none !important; }}
           .staff-compact-dashboard .dashboard-overview {{ display:block; }}
           .staff-compact-dashboard .dashboard-overview .action-panel {{ margin-bottom:0; }}
           .staff-compact-dashboard > .panel:first-child {{ margin-bottom:8px; }}
@@ -10533,7 +7477,7 @@ def render_dashboard(user, query, mobile_request=False):
           .staff-compact-dashboard .card {{ min-height:38px; grid-template-columns:30px minmax(0,1fr); padding:3px; gap:4px; }}
           .staff-compact-dashboard .card .photo,
           .staff-compact-dashboard .card .photo img {{ width:28px; height:28px; }}
-          .staff-compact-dashboard .card .content {{ gap:4px; line-height:1; }}
+          .staff-compact-dashboard .card .content {{ gap:0; }}
           .staff-compact-dashboard .card .name {{ font-size:11px; line-height:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
           .staff-compact-dashboard .card .class-tag,
           .staff-compact-dashboard .card .small {{ font-size:9px; line-height:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
@@ -10544,14 +7488,10 @@ def render_dashboard(user, query, mobile_request=False):
           .staff-compact-dashboard .staff-class-summary th,
           .staff-compact-dashboard .staff-class-summary td {{ padding:3px 5px; font-size:11px; white-space:nowrap; }}
           .staff-compact-dashboard .staff-class-summary th:first-child,
-          .staff-compact-dashboard .staff-class-summary td:first-child {{ width:28px; padding-left:0; text-align:center; }}
+          .staff-compact-dashboard .staff-class-summary td:first-child {{ width:86px; padding-left:0; }}
           .staff-compact-dashboard .staff-class-summary th:not(:first-child),
-          .staff-compact-dashboard .staff-class-summary td:not(:first-child) {{ width:22px; text-align:center; }}
-          .staff-compact-dashboard .staff-class-summary th,
-          .staff-compact-dashboard .staff-class-summary td {{ padding:2px 3px; font-size:9px; }}
-          .staff-compact-dashboard .staff-class-summary .staff-group-icon {{ width:20px; height:20px; }}
-          .staff-compact-dashboard .staff-group-summary-columns {{ gap:4px; }}
-          .staff-compact-dashboard .staff-summary-total {{ gap:6px; font-size:9px; }}
+          .staff-compact-dashboard .staff-class-summary td:not(:first-child) {{ width:30px; text-align:center; }}
+          .staff-compact-dashboard .staff-class-summary .summary-total td {{ font-weight:700; background:#f4f7f6; }}
           .staff-compact-dashboard .selected-child-panel {{ padding:8px; }}
           .staff-compact-dashboard .selected-child-panel h3 {{ display:none; }}
           .staff-compact-dashboard .selected-child-head {{ grid-template-columns:44px minmax(0,1fr); gap:7px; margin-bottom:6px; }}
@@ -10567,7 +7507,7 @@ def render_dashboard(user, query, mobile_request=False):
           .admin-compact-dashboard .card {{ width:100%; max-width:100%; min-width:0; min-height:34px; grid-template-columns:24px minmax(0,1fr); padding:2px; gap:3px; }}
           .admin-compact-dashboard .card .photo,
           .admin-compact-dashboard .card .photo img {{ width:22px; height:22px; min-width:0; }}
-          .admin-compact-dashboard .card .content {{ gap:4px; line-height:1; min-width:0; overflow:hidden; }}
+          .admin-compact-dashboard .card .content {{ gap:0; min-width:0; overflow:hidden; }}
           .admin-compact-dashboard .card .name {{ display:block; width:100%; min-width:0; font-size:10px; line-height:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
           .admin-compact-dashboard .card .class-tag,
           .admin-compact-dashboard .card .small {{ display:block; max-width:100%; min-width:0; font-size:8px; line-height:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
@@ -10594,46 +7534,46 @@ def render_dashboard(user, query, mobile_request=False):
         {dashboard_overview_panel_html}
           <div class="{dashboard_grid_class}" style="margin-top:{'0' if is_child_account else '16px'}">
           {children_panel_html}
-          {dashboard_side_html}
+            <div class="grid dashboard-side" style="gap:16px">
+            <div class="panel selected-child-panel" id="selected-child-actions">
+              <h3>Enfant</h3>
+              <div class="selected-child-head {selected_status_class}">
+                {f'<img src="{selected_photo_url}" alt="{selected_name}">' if selected_photo_url else '<div class="muted">No photo</div>'}
+                <div>
+                  <div class="selected-child-name">{selected_name}</div>
+                  <div class="small muted">{selected_class_name}</div>
+                  <div class="badge {selected_status_class}">{status_label(selected_status)}</div>
+                </div>
+              </div>
+              <div class="action-buttons" style="margin-bottom:10px">
+                <form method="post" action="/child/{selected_child['id'] if selected_child else 0}/event" onsubmit="return confirm('Check in {selected_name} ?')" style="display:inline">
+                  <input type="hidden" name="date" value="{html.escape(selected_date)}">
+                  <input type="hidden" name="event_type" value="checkin">
+                  <button class="btn {checkin_class}" type="submit" {"disabled" if checkin_disabled else ""}>{checkin_label}</button>
+                </form>
+                <form method="post" action="/child/{selected_child['id'] if selected_child else 0}/event" onsubmit="return confirm('Check out {selected_name} ?')" style="display:inline">
+                  <input type="hidden" name="date" value="{html.escape(selected_date)}">
+                  <input type="hidden" name="event_type" value="checkout">
+                  <button class="btn {checkout_class}" type="submit" {"disabled" if checkout_disabled else ""}>{checkout_label}</button>
+                </form>
+                {clear_day_html}
+              </div>
+              {action_disabled_note}
+              {selected_recent_html}
+            </div>
+            {class_summary_html}
+            {admin_tools_html}
+          </div>
         </div>
         </div>
-        {selected_child_modal_html}
         {owner_initialization_html}
       <script>
         (function() {{
           const version = {version};
           const currentUrl = new URL(window.location.href);
-          const chartHost = document.getElementById('dashboard-arrival-chart');
-          function loadDashboardChart() {{
-            if (!chartHost) return;
-            const params = new URLSearchParams({{
-              class: currentUrl.searchParams.get('class') || {json.dumps(selected_class)},
-              date: currentUrl.searchParams.get('date') || {json.dumps(selected_date)}
-            }});
-            fetch('/api/dashboard/arrival-chart?' + params.toString(), {{
-              credentials: 'same-origin',
-              cache: 'no-store'
-            }})
-            .then(response => response.ok ? response.json() : Promise.reject(new Error('chart')))
-            .then(data => {{
-              if (!data || !data.ok) throw new Error('chart');
-              if (data.html) chartHost.outerHTML = data.html;
-              else chartHost.innerHTML = '<div class="muted">Aucune tendance disponible.</div>';
-            }})
-            .catch(() => {{
-              chartHost.setAttribute('aria-busy', 'false');
-              chartHost.innerHTML = '<div class="muted">Tendances temporairement indisponibles.</div>';
-            }});
-          }}
-          if (chartHost) {{
-            if ('requestIdleCallback' in window) window.requestIdleCallback(loadDashboardChart, {{ timeout: 800 }});
-            else window.setTimeout(loadDashboardChart, 0);
-          }}
           function poll() {{
-            if (document.visibilityState !== 'visible') return;
-            fetch('/api/dashboard-version?class=' + encodeURIComponent(currentUrl.searchParams.get('class') || {json.dumps(selected_class)}) + '&date=' + encodeURIComponent(currentUrl.searchParams.get('date') || {json.dumps(selected_date)}) + '&_=' + Date.now(), {{
-              credentials: 'same-origin',
-              cache: 'no-store'
+            fetch('/api/dashboard-version?class=' + encodeURIComponent(currentUrl.searchParams.get('class') || '{html.escape(selected_class)}') + '&date=' + encodeURIComponent(currentUrl.searchParams.get('date') || '{html.escape(selected_date)}'), {{
+              credentials: 'same-origin'
             }})
             .then(r => r.ok ? r.json() : null)
             .then(data => {{
@@ -10644,31 +7584,11 @@ def render_dashboard(user, query, mobile_request=False):
             }})
             .catch(() => {{}});
           }}
-          document.addEventListener('visibilitychange', function() {{
-            if (document.visibilityState === 'visible') poll();
-          }});
           setInterval(poll, 5000);
         }})();
         </script>
         """
-        mark_perf("template")
-        page = html_page("Tableau", user, body)
-        completed_at = time.perf_counter()
-        total_ms = (completed_at - perf_started) * 1000
-        if total_ms >= SLOW_REQUEST_LOG_MS or os.getenv("TIMERECORD_PERF_LOG", "").strip() == "1":
-            previous = perf_started
-            segments = []
-            for label, marked_at in perf_marks:
-                segments.append(f"{label}={(marked_at - previous) * 1000:.1f}ms")
-                previous = marked_at
-            segments.append(f"html={(completed_at - previous) * 1000:.1f}ms")
-            print(
-                f"PERF route=/dashboard total={total_ms:.1f}ms project={project_id} role={user['role']} "
-                f"class={selected_class!r} date={selected_date!r} " + " ".join(segments),
-                file=sys.stderr,
-                flush=True,
-            )
-        return page
+        return html_page("Tableau", user, body)
 
 
 def render_child_detail(user, child_id, query):
@@ -10725,14 +7645,9 @@ def render_child_detail(user, child_id, query):
         return html_page(child["name"], user, body)
 
 
-def contact_list_rows(conn, user, class_name="all"):
-    params = [effective_project_id(conn, user)]
-    class_filter = ""
-    if class_name and class_name != "all":
-        class_filter = "AND COALESCE(persons.class_name, '') = ?"
-        params.append(class_name)
+def contact_list_rows(conn, user):
     return conn.execute(
-        f"""
+        """
         SELECT web_users.id, web_users.username, web_users.display_name, web_users.role,
                COALESCE(persons.class_name, '') AS linked_class_name,
                COALESCE(user_profiles.phones_json, '[]') AS phones_json,
@@ -10742,10 +7657,9 @@ def contact_list_rows(conn, user, class_name="all"):
         LEFT JOIN persons ON persons.id = web_users.person_id
         WHERE web_users.is_active = 1
           AND web_users.project_id = ?
-          {class_filter}
         ORDER BY web_users.role, web_users.display_name
         """,
-        params,
+        (effective_project_id(conn, user),),
     ).fetchall()
 
 
@@ -10780,11 +7694,7 @@ def render_contacts(user, query=None):
     if sort_dir not in {"asc", "desc"}:
         sort_dir = "asc"
     with connect_db() as conn:
-        classes = classes_for_user(user, conn)
-        selected_class = query.get("group", ["all"])[0]
-        if selected_class != "all" and selected_class not in classes:
-            selected_class = "all"
-        rows = contact_list_rows(conn, user, selected_class)
+        rows = contact_list_rows(conn, user)
     rows = sorted(
         rows,
         key=lambda row: (
@@ -10796,11 +7706,7 @@ def render_contacts(user, query=None):
     def sort_header(key, label):
         next_dir = "desc" if sort_key == key and sort_dir == "asc" else "asc"
         marker = " ▲" if sort_key == key and sort_dir == "asc" else (" ▼" if sort_key == key else "")
-        return f'<a href="/contacts?group={quote(selected_class)}&sort={key}&dir={next_dir}">{html.escape(label + marker)}</a>'
-    group_options = ['<option value="all">Tous</option>'] + [
-        f'<option value="{html.escape(class_name, quote=True)}" {"selected" if class_name == selected_class else ""}>{html.escape(class_name)}</option>'
-        for class_name in classes
-    ]
+        return f'<a href="/contacts?sort={key}&dir={next_dir}">{html.escape(label + marker)}</a>'
     body_rows = []
     for row in rows:
         phones, emails = contact_values(row)
@@ -10813,23 +7719,13 @@ def render_contacts(user, query=None):
             f"</tr>"
         )
     body = f"""
-    <style>
-      .contacts-table-wrap {{ width:100%; overflow:auto; }}
-      .contacts-table {{ width:max-content; min-width:0; table-layout:auto; }}
-      .contacts-table th, .contacts-table td {{ width:1%; padding:6px 8px; white-space:nowrap; }}
-    </style>
     <div class="panel">
       <h2>Phone and e-mail list</h2>
       <div class="toolbar">
-        <form method="get" action="/contacts" class="contacts-group-form">
-          <div><label>GROUPE</label><select name="group" onchange="this.form.submit()">{''.join(group_options)}</select></div>
-          <input type="hidden" name="sort" value="{html.escape(sort_key, quote=True)}">
-          <input type="hidden" name="dir" value="{html.escape(sort_dir, quote=True)}">
-        </form>
-        <a class="btn primary" href="/contacts.xlsx?group={quote(selected_class)}">Exporter Excel</a>
+        <a class="btn primary" href="/contacts.xlsx">Exporter Excel</a>
       </div>
-      <div class="table-wrap contacts-table-wrap">
-        <table class="contacts-table">
+      <div class="table-wrap">
+        <table>
           <thead><tr><th>{sort_header("name", "Name")}</th><th>{sort_header("role", "Role")}</th><th>Phones</th><th>e-mail</th></tr></thead>
           <tbody>{''.join(body_rows) or '<tr><td colspan="4" class="muted">No contacts found.</td></tr>'}</tbody>
         </table>
@@ -10839,12 +7735,9 @@ def render_contacts(user, query=None):
     return html_page("Contacts", user, body)
 
 
-def build_contacts_xlsx(user, selected_class="all"):
+def build_contacts_xlsx(user):
     with connect_db() as conn:
-        classes = classes_for_user(user, conn)
-        if selected_class != "all" and selected_class not in classes:
-            raise PermissionError("Group outside current user scope")
-        rows = contact_list_rows(conn, user, selected_class)
+        rows = contact_list_rows(conn, user)
     export_rows = []
     for row in rows:
         phones, emails = contact_values(row)
@@ -10906,103 +7799,6 @@ def build_users_xlsx(user):
     ])
 
 
-def render_child_attendance_history(user, query):
-    if user["role"] != "boss":
-        return html_page("Forbidden", user, '<div class="panel">You are not allowed to view child attendance history.</div>')
-
-    today = local_now().date()
-    default_start = today - timedelta(days=29)
-    start_text = query.get("start", [default_start.strftime("%Y-%m-%d")])[0]
-    end_text = query.get("end", [today.strftime("%Y-%m-%d")])[0]
-    try:
-        start_date = datetime.strptime(start_text, "%Y-%m-%d").date()
-        end_date = datetime.strptime(end_text, "%Y-%m-%d").date()
-    except ValueError:
-        start_date, end_date = default_start, today
-    if end_date < start_date:
-        start_date, end_date = end_date, start_date
-    if (end_date - start_date).days > 366:
-        start_date = end_date - timedelta(days=366)
-    start_text = start_date.strftime("%Y-%m-%d")
-    end_text = end_date.strftime("%Y-%m-%d")
-
-    with connect_db() as conn:
-        children = get_children(conn, user)
-        selected_id_text = query.get("person_id", [str(children[0]["id"]) if children else ""])[0]
-        allowed_ids = {int(child["id"]) for child in children}
-        selected_id = int(selected_id_text) if selected_id_text.isdigit() and int(selected_id_text) in allowed_ids else (int(children[0]["id"]) if children else 0)
-        selected_child = next((child for child in children if int(child["id"]) == selected_id), None)
-        event_rows = []
-        if selected_child:
-            event_rows = conn.execute(
-                """
-                SELECT event_type, timestamp, COALESCE(operator_name, '') AS operator_name
-                FROM attendance
-                WHERE person_id = ? AND role = 'children'
-                  AND substr(timestamp, 1, 10) BETWEEN ? AND ?
-                ORDER BY timestamp ASC, id ASC
-                """,
-                (selected_id, start_text, end_text),
-            ).fetchall()
-
-    events_by_day = {}
-    for event in event_rows:
-        events_by_day.setdefault(event["timestamp"][:10], []).append(event)
-    closed_dates = set(load_closed_dates())
-    rows = []
-    current = end_date
-    while current >= start_date:
-        if current.weekday() < 5:
-            day_text = current.strftime("%Y-%m-%d")
-            day_events = events_by_day.get(day_text, [])
-            if day_text in closed_dates:
-                status = "F"
-            elif any(event["event_type"] == "checkin" for event in day_events):
-                status = "P"
-            else:
-                status = "A"
-            status_class = {"P": "present", "A": "absent", "F": "closed"}.get(status, "absent")
-            checkins = [event["timestamp"][11:16] for event in day_events if event["event_type"] == "checkin"]
-            checkouts = [event["timestamp"][11:16] for event in day_events if event["event_type"] == "checkout"]
-            operators = []
-            for event in day_events:
-                name = (event["operator_name"] or "").strip()
-                if name and name not in operators:
-                    operators.append(name)
-            rows.append(
-                f"<tr><td>{html.escape(date_with_weekday_letter(day_text))}</td>"
-                f"<td><span class=\"badge {status_class}\">{html.escape(status_label(status))}</span></td>"
-                f"<td>{html.escape(checkins[0] if checkins else '-')}</td>"
-                f"<td>{html.escape(checkouts[-1] if checkouts else '-')}</td>"
-                f"<td>{len(day_events)}</td><td>{html.escape(', '.join(operators) or '-')}</td></tr>"
-            )
-        current -= timedelta(days=1)
-
-    child_options = "".join(
-        f'<option value="{child["id"]}" {"selected" if int(child["id"]) == selected_id else ""}>{html.escape(child["name"])}</option>'
-        for child in children
-    )
-    selected_name = html.escape(selected_child["name"]) if selected_child else ""
-    body = f"""
-    <div class="panel">
-      <h2>HISTORIQUE DES PRÉSENCES</h2>
-      <form method="get" action="/child-attendance-history" class="toolbar">
-        <div><label>Enfant</label><select name="person_id" onchange="this.form.submit()">{child_options}</select></div>
-        <div><label>Début</label><input type="date" name="start" value="{html.escape(start_text)}" onchange="this.form.submit()"></div>
-        <div><label>Fin</label><input type="date" name="end" value="{html.escape(end_text)}" onchange="this.form.submit()"></div>
-      </form>
-      <div class="small muted" style="margin-bottom:8px">{selected_name}</div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Date</th><th>Statut</th><th>First in</th><th>Last out</th><th>Events</th><th>Opérateur</th></tr></thead>
-          <tbody>{''.join(rows) if rows else '<tr><td colspan="6" class="muted">No records.</td></tr>'}</tbody>
-        </table>
-      </div>
-    </div>
-    """
-    return html_page("Historique des présences", user, body)
-
-
 def render_reports(user, query):
     with connect_db() as conn:
         classes = classes_for_user(user, conn)
@@ -11031,21 +7827,6 @@ def render_reports(user, query):
         start_text = start.strftime("%Y-%m-%d")
         weeks = fiche_summary(conn, child["id"], start_text)
         sheet = render_fiche_calendar(weeks)
-        history_button = ""
-        if user["role"] == "boss":
-            history_end = (start + timedelta(days=27)).strftime("%Y-%m-%d")
-            history_button = (
-                f'<div><a class="btn" href="/child-attendance-history?person_id={child["id"]}'
-                f'&start={html.escape(start_text, quote=True)}&end={html.escape(history_end, quote=True)}">'
-                'HISTORIQUE DES PRÉSENCES</a></div>'
-            )
-        generate_pdf_button = ""
-        if user["role"] in {"principal", "boss"}:
-            generate_pdf_button = """
-            <div>
-              <button class="btn primary" type="submit" name="generate" value="1" data-wait-message="Génération du PDF..." data-wait-text="Génération..." data-download-wait="true">Générer le PDF</button>
-            </div>
-            """
         body = f"""
         <div class="panel no-print">
           <h2>4-Week Fiche</h2>
@@ -11067,8 +7848,9 @@ def render_reports(user, query):
                 <option value="summary" {"selected" if selected_format == "summary" else ""}>Summary 4 week</option>
               </select>
             </div>
-            {generate_pdf_button}
-            {history_button}
+            <div>
+              <button class="btn primary" type="submit" name="generate" value="1" data-wait-message="Génération du PDF..." data-wait-text="Génération..." data-download-wait="true">Générer le PDF</button>
+            </div>
           </form>
         </div>
         <div class="panel" style="margin-top:16px">
@@ -11093,11 +7875,7 @@ def render_statistics_15min(user, query):
     next_month = (selected_month + timedelta(days=32)).replace(day=1)
 
     with connect_db() as conn:
-        rows = attendance_export_source_rows(
-            conn,
-            selected_date_text,
-            project_id=effective_project_id(conn, user),
-        )
+        rows = attendance_export_source_rows(conn, selected_date_text)
         children = get_children(conn, user, "all")
         chart_html = render_dashboard_arrival_chart(conn, children, selected_date_text)
     summary_rows = build_presence_summary_rows(rows)
@@ -11173,31 +7951,6 @@ def render_statistics_15min(user, query):
     return html_page("Résumé des présences", user, body)
 
 
-def teacher_schedule_map_for_range(conn, project_id, start_day_text, end_day_text):
-    rows = conn.execute(
-        """
-        SELECT teacher_name, day_text, schedule_in, schedule_out, work_hours, class_name
-        FROM teacher_schedule
-        WHERE project_id = ? AND day_text BETWEEN ? AND ?
-        ORDER BY lower(teacher_name), day_text, schedule_in ASC, schedule_out ASC, id ASC
-        """,
-        (int(project_id or 1), start_day_text, end_day_text),
-    ).fetchall()
-    grouped = {}
-    for row in rows:
-        key = ((row["teacher_name"] or "").strip().lower(), row["day_text"])
-        grouped.setdefault(key, []).append(row)
-    schedules = {}
-    for key, schedule_rows in grouped.items():
-        schedules[key] = {
-            "schedule_in": min(row["schedule_in"] for row in schedule_rows),
-            "schedule_out": max(row["schedule_out"] for row in schedule_rows),
-            "work_hours": sum(float(row["work_hours"] or 0) for row in schedule_rows),
-            "class_name": "; ".join(row["class_name"] for row in schedule_rows if row["class_name"]),
-        }
-    return schedules
-
-
 def teacher_attendance_day_summary(conn, day_text, project_id=1):
     project_id = int(project_id or 1)
     teachers = conn.execute(
@@ -11211,25 +7964,6 @@ def teacher_attendance_day_summary(conn, day_text, project_id=1):
         """,
         (project_id, project_id),
     ).fetchall()
-    teacher_ids = [int(teacher["id"]) for teacher in teachers]
-    events_by_person = {teacher_id: [] for teacher_id in teacher_ids}
-    if teacher_ids:
-        placeholders = ",".join("?" for _ in teacher_ids)
-        next_day = (datetime.strptime(day_text, "%Y-%m-%d").date() + timedelta(days=1)).strftime("%Y-%m-%d")
-        event_rows = conn.execute(
-            f"""
-            SELECT person_id, event_type, timestamp, COALESCE(snapshot_path, '') AS snapshot_path
-            FROM attendance
-            WHERE person_id IN ({placeholders})
-              AND role = 'teachers'
-              AND timestamp >= ? AND timestamp < ?
-            ORDER BY person_id, timestamp ASC, id ASC
-            """,
-            (*teacher_ids, f"{day_text} 00:00:00", f"{next_day} 00:00:00"),
-        ).fetchall()
-        for event in event_rows:
-            events_by_person.setdefault(int(event["person_id"]), []).append(event)
-    schedules = teacher_schedule_map_for_range(conn, project_id, day_text, day_text)
     rows = []
     total = len(teachers)
     present_now = 0
@@ -11238,10 +7972,17 @@ def teacher_attendance_day_summary(conn, day_text, project_id=1):
     total_checkins = 0
     total_checkouts = 0
     actual_hours_person_ids = actual_hours_staff_person_ids(conn, project_id)
-    empty_schedule = {"schedule_in": "", "schedule_out": "", "work_hours": 0.0, "class_name": ""}
 
     for teacher in teachers:
-        events = events_by_person.get(int(teacher["id"]), [])
+        events = conn.execute(
+            """
+            SELECT event_type, timestamp, COALESCE(snapshot_path, '') AS snapshot_path
+            FROM attendance
+            WHERE person_id = ? AND role = 'teachers' AND timestamp LIKE ?
+            ORDER BY timestamp ASC, id ASC
+            """,
+            (teacher["id"], f"{day_text}%"),
+        ).fetchall()
         checkin_events = [event for event in events if event["event_type"] == "checkin"]
         checkout_events = [event for event in events if event["event_type"] == "checkout"]
         checkins = [event["timestamp"] for event in checkin_events]
@@ -11260,7 +8001,7 @@ def teacher_attendance_day_summary(conn, day_text, project_id=1):
             arrived_today += 1
         else:
             not_arrived += 1
-        schedule = schedules.get(((teacher["name"] or "").strip().lower(), day_text), empty_schedule)
+        schedule = teacher_schedule_for_day(conn, teacher["name"], day_text, project_id)
         actual_work_hours = calculate_teacher_work_hours(
             day_text,
             checkins[0] if checkins else "",
@@ -11270,23 +8011,35 @@ def teacher_attendance_day_summary(conn, day_text, project_id=1):
         )
         rows.append(
             {
-                "id": teacher["id"], "name": teacher["name"], "photo_path": teacher["photo_path"],
-                "status": status, "first_checkin": checkins[0] if checkins else "",
+                "id": teacher["id"],
+                "name": teacher["name"],
+                "photo_path": teacher["photo_path"],
+                "status": status,
+                "first_checkin": checkins[0] if checkins else "",
                 "last_checkout": checkouts[-1] if checkouts else "",
                 "first_checkin_mobile": attendance_event_is_mobile(first_checkin_event),
                 "last_checkout_mobile": attendance_event_is_mobile(last_checkout_event),
-                "latest_event": latest_event, "latest_time": latest_time,
-                "latest_snapshot_path": latest_snapshot_path, "event_count": len(events),
-                "schedule_in": schedule["schedule_in"], "schedule_out": schedule["schedule_out"],
-                "scheduled_hours": schedule["work_hours"], "scheduled_class": schedule["class_name"],
+                "latest_event": latest_event,
+                "latest_time": latest_time,
+                "latest_snapshot_path": latest_snapshot_path,
+                "event_count": len(events),
+                "schedule_in": schedule["schedule_in"],
+                "schedule_out": schedule["schedule_out"],
+                "scheduled_hours": schedule["work_hours"],
+                "scheduled_class": schedule["class_name"],
                 "work_hours": actual_work_hours,
             }
         )
     return {
-        "teachers": rows, "total": total, "present_now": present_now,
-        "arrived_today": arrived_today, "not_arrived": not_arrived,
-        "total_checkins": total_checkins, "total_checkouts": total_checkouts,
+        "teachers": rows,
+        "total": total,
+        "present_now": present_now,
+        "arrived_today": arrived_today,
+        "not_arrived": not_arrived,
+        "total_checkins": total_checkins,
+        "total_checkouts": total_checkouts,
     }
+
 
 def teacher_pay_hours_summary(conn, start_date_text, end_date_text, project_id=1):
     project_id = int(project_id or 1)
@@ -11315,31 +8068,9 @@ def teacher_pay_hours_summary(conn, start_date_text, end_date_text, project_id=1
         """,
         (project_id, project_id),
     ).fetchall()
-    teacher_ids = [int(teacher["id"]) for teacher in teachers]
-    events_by_person_day = {}
-    if teacher_ids:
-        placeholders = ",".join("?" for _ in teacher_ids)
-        end_exclusive = (end_date + timedelta(days=1)).strftime("%Y-%m-%d")
-        event_rows = conn.execute(
-            f"""
-            SELECT person_id, event_type, timestamp
-            FROM attendance
-            WHERE person_id IN ({placeholders})
-              AND role = 'teachers'
-              AND timestamp >= ? AND timestamp < ?
-            ORDER BY person_id, timestamp ASC, id ASC
-            """,
-            (*teacher_ids, f"{start_date.strftime('%Y-%m-%d')} 00:00:00", f"{end_exclusive} 00:00:00"),
-        ).fetchall()
-        for event in event_rows:
-            key = (int(event["person_id"]), event["timestamp"][:10])
-            events_by_person_day.setdefault(key, []).append(event)
-    schedules = teacher_schedule_map_for_range(
-        conn, project_id, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")
-    )
+
     rows = []
     actual_hours_person_ids = actual_hours_staff_person_ids(conn, project_id)
-    empty_schedule = {"schedule_in": "", "schedule_out": "", "work_hours": 0.0, "class_name": ""}
     for teacher in teachers:
         total_hours = 0.0
         schedule_total_hours = 0.0
@@ -11347,18 +8078,25 @@ def teacher_pay_hours_summary(conn, start_date_text, end_date_text, project_id=1
         event_count = 0
         open_record = False
         daily_values = {}
-        daily_schedule_values = {}
-        teacher_id = int(teacher["id"])
-        teacher_key = (teacher["name"] or "").strip().lower()
-        uses_actual_hours = teacher_id in actual_hours_person_ids
         for day_text in day_values:
-            events = events_by_person_day.get((teacher_id, day_text), [])
+            events = conn.execute(
+                """
+                SELECT event_type, timestamp
+                FROM attendance
+                WHERE person_id = ?
+                  AND role = 'teachers'
+                  AND timestamp LIKE ?
+                ORDER BY timestamp ASC, id ASC
+                """,
+                (teacher["id"], f"{day_text}%"),
+            ).fetchall()
             event_count += len(events)
             if events and events[-1]["event_type"] == "checkin":
                 open_record = True
             checkins = [event["timestamp"] for event in events if event["event_type"] == "checkin"]
             checkouts = [event["timestamp"] for event in events if event["event_type"] == "checkout"]
-            schedule = schedules.get((teacher_key, day_text), empty_schedule)
+            schedule = teacher_schedule_for_day(conn, teacher["name"], day_text, project_id)
+            uses_actual_hours = int(teacher["id"]) in actual_hours_person_ids
             daily_value = calculate_teacher_work_hours(
                 day_text,
                 checkins[0] if checkins else "",
@@ -11366,9 +8104,10 @@ def teacher_pay_hours_summary(conn, start_date_text, end_date_text, project_id=1
                 schedule["schedule_in"],
                 use_schedule=not uses_actual_hours,
             )
-            daily_schedule_value = float(daily_value or 0) if uses_actual_hours else float(schedule.get("work_hours") or 0)
-            daily_schedule_values[day_text] = daily_schedule_value
-            schedule_total_hours += daily_schedule_value
+            if uses_actual_hours:
+                schedule_total_hours += float(daily_value or 0)
+            else:
+                schedule_total_hours += float(schedule.get("work_hours") or 0)
             if daily_value:
                 daily_values[day_text] = daily_value
                 total_hours += float(daily_value)
@@ -11377,42 +8116,16 @@ def teacher_pay_hours_summary(conn, start_date_text, end_date_text, project_id=1
                 daily_values[day_text] = ""
         rows.append(
             {
-                "name": teacher["name"], "hours": total_hours,
-                "schedule_hours": schedule_total_hours, "daily_hours": daily_values,
-                "daily_schedule_hours": daily_schedule_values,
-                "pairs": payable_days, "events": event_count, "open_record": open_record,
+                "name": teacher["name"],
+                "hours": total_hours,
+                "schedule_hours": schedule_total_hours,
+                "daily_hours": daily_values,
+                "pairs": payable_days,
+                "events": event_count,
+                "open_record": open_record,
             }
         )
     return start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"), day_values, rows
-
-
-def build_teacher_work_hours_export_xlsx(user, start_date_text, end_date_text):
-    if user["role"] != "boss":
-        raise PermissionError("Teacher work-hours export is boss only")
-    with connect_db() as conn:
-        project_id = effective_project_id(conn, user)
-        start_date, end_date, day_values, rows = teacher_pay_hours_summary(
-            conn, start_date_text, end_date_text, project_id
-        )
-    headers = ["Teacher", "W-T", "S-T"] + [date_with_weekday_letter(day, short=True) for day in day_values] + ["Days", "Events", "Open"]
-    export_rows = [
-        [row["name"], f'{row["hours"]:.2f}', f'{row["schedule_hours"]:.2f}']
-        + [row["daily_hours"].get(day, "") for day in day_values]
-        + [row["pairs"], row["events"], "Open" if row["open_record"] else ""]
-        for row in rows
-    ]
-    workbook = [{"name": "Heures éducatrices", "headers": headers, "rows": export_rows}]
-    return build_xlsx_bytes(workbook), start_date, end_date
-
-def date_with_weekday_letter(value, short=False):
-    text = str(value or "")
-    try:
-        parsed_date = datetime.strptime(text[:10], "%Y-%m-%d").date()
-    except (TypeError, ValueError):
-        return text
-    date_part = parsed_date.strftime("%m-%d") if short else parsed_date.strftime("%Y-%m-%d")
-    suffix = text[10:]
-    return f"{date_part} {'MTWTFSS'[parsed_date.weekday()]}{suffix}"
 
 
 def staff_in_out_rows(conn, person_id, start_date_text, end_date_text):
@@ -11432,34 +8145,23 @@ def staff_in_out_rows(conn, person_id, start_date_text, end_date_text):
             day_values.append(current_day.strftime("%Y-%m-%d"))
         current_day += timedelta(days=1)
 
+    rows = []
     person = conn.execute("SELECT name, project_id FROM persons WHERE id = ? AND role = 'teachers'", (person_id,)).fetchone()
     person_name = person["name"] if person else ""
     project_id = int(person["project_id"] or 1) if person else 1
-    events_by_day = {}
-    if person and day_values:
-        end_exclusive = (end_date + timedelta(days=1)).strftime("%Y-%m-%d")
+    for day_text in day_values:
         events = conn.execute(
             """
             SELECT event_type, timestamp
             FROM attendance
             WHERE person_id = ?
               AND role = 'teachers'
-              AND timestamp >= ? AND timestamp < ?
+              AND timestamp LIKE ?
             ORDER BY timestamp ASC, id ASC
             """,
-            (person_id, f"{start_date.strftime('%Y-%m-%d')} 00:00:00", f"{end_exclusive} 00:00:00"),
+            (person_id, f"{day_text}%"),
         ).fetchall()
-        for event in events:
-            events_by_day.setdefault(event["timestamp"][:10], []).append(event)
-    schedules = teacher_schedule_map_for_range(
-        conn, project_id, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")
-    ) if person and day_values else {}
-    teacher_key = (person_name or "").strip().lower()
-    empty_schedule = {"schedule_in": "", "schedule_out": ""}
-    rows = []
-    for day_text in day_values:
-        events = events_by_day.get(day_text, [])
-        schedule = schedules.get((teacher_key, day_text), empty_schedule)
+        schedule = teacher_schedule_for_day(conn, person_name, day_text, project_id) if person_name else {"schedule_in": "", "schedule_out": ""}
         checkins = [event["timestamp"][11:16] for event in events if event["event_type"] == "checkin"]
         checkouts = [event["timestamp"][11:16] for event in events if event["event_type"] == "checkout"]
         rows.append(
@@ -11473,12 +8175,13 @@ def staff_in_out_rows(conn, person_id, start_date_text, end_date_text):
         )
     return start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"), rows
 
+
 def staff_in_out_panel_html(person, start_text, end_text, rows, heading="Présences des éducatrices"):
     heading_html = "" if heading == "Présences des éducatrices" else f"<h2>{html.escape(heading)}</h2>"
     table_rows = "".join(
         f"""
         <tr>
-          <td>{html.escape(date_with_weekday_letter(row['date']))}</td>
+          <td>{html.escape(row['date'])}</td>
           <td>{html.escape(row['in'] or '-')}</td>
           <td>{html.escape(row['out'] or '-')}</td>
           <td>{html.escape(row['schedule_in'] or '-')}</td>
@@ -11528,10 +8231,28 @@ def staff_in_out_range_script():
     {principal_self_script}
     <script>
     (function() {
+      const keyStart = 'teacherAttendanceSelfStart';
+      const keyEnd = 'teacherAttendanceSelfEnd';
+      const params = new URLSearchParams(window.location.search);
       const form = document.querySelector('[data-staff-inout-range]');
       if (!form) return;
       const start = form.querySelector('input[name="pay_start"]');
       const end = form.querySelector('input[name="pay_end"]');
+      if (!params.has('pay_start') && !params.has('pay_end')) {
+        const savedStart = window.localStorage ? window.localStorage.getItem(keyStart) : '';
+        const savedEnd = window.localStorage ? window.localStorage.getItem(keyEnd) : '';
+        if (savedStart || savedEnd) {
+          if (savedStart) params.set('pay_start', savedStart);
+          if (savedEnd) params.set('pay_end', savedEnd);
+          window.location.href = '/teacher-attendance?' + params.toString();
+          return;
+        }
+      }
+      form.addEventListener('submit', function() {
+        if (!window.localStorage) return;
+        if (start && start.value) window.localStorage.setItem(keyStart, start.value);
+        if (end && end.value) window.localStorage.setItem(keyEnd, end.value);
+      });
       [start, end].forEach(function(input) {
         if (!input) return;
         input.addEventListener('change', function() {
@@ -11552,15 +8273,13 @@ def render_staff_teacher_attendance(user, query):
             user,
             '<div class="panel"><h2>Présences des éducatrices</h2><div class="alert warn">Ce compte n\'est pas lié à une fiche employé.</div></div>',
         )
+    default_start = query.get("pay_start", [today_text()])[0]
+    default_end = query.get("pay_end", [today_text()])[0]
     with connect_db() as conn:
-        saved_start, saved_end = get_teacher_attendance_range(conn, user["id"], today_text(), today_text())
-        default_start = query.get("pay_start", [saved_start])[0]
-        default_end = query.get("pay_end", [saved_end])[0]
         person = conn.execute("SELECT * FROM persons WHERE id = ? AND role = 'teachers'", (user["person_id"],)).fetchone()
         if not person:
             return html_page("Présences éducatrices", user, '<div class="panel"><div class="alert warn">Fiche employé introuvable.</div></div>')
         start_text, end_text, rows = staff_in_out_rows(conn, int(user["person_id"]), default_start, default_end)
-        set_teacher_attendance_range(conn, user["id"], start_text, end_text)
     body = staff_in_out_panel_html(person, start_text, end_text, rows) + staff_in_out_range_script()
     return html_page("Présences éducatrices", user, body)
 
@@ -11571,33 +8290,20 @@ def teacher_six_week_hours_summary(conn, end_date_text, project_id=1):
     except ValueError:
         end_date = local_now().date()
     week_start = end_date - timedelta(days=end_date.weekday())
-    week_ranges = []
+    weeks = []
     for offset in range(5, -1, -1):
         start = week_start - timedelta(days=offset * 7)
         end = start + timedelta(days=6)
-        week_ranges.append((start, end))
-    range_start = week_ranges[0][0]
-    range_end = week_ranges[-1][1]
-    _start, _end, _days, pay_rows = teacher_pay_hours_summary(
-        conn, range_start.strftime("%Y-%m-%d"), range_end.strftime("%Y-%m-%d"), project_id
-    )
-    weeks = []
-    for start, end in week_ranges:
-        day_keys = [(start + timedelta(days=offset)).strftime("%Y-%m-%d") for offset in range(7)]
+        _start, _end, _days, rows = teacher_pay_hours_summary(conn, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), project_id)
         weeks.append(
             {
                 "label": f"{start.strftime('%m-%d')}",
-                "actual": sum(
-                    float(row.get("daily_hours", {}).get(day_text) or 0)
-                    for row in pay_rows for day_text in day_keys
-                ),
-                "schedule": sum(
-                    float(row.get("daily_schedule_hours", {}).get(day_text) or 0)
-                    for row in pay_rows for day_text in day_keys
-                ),
+                "actual": sum(float(row["hours"] or 0) for row in rows),
+                "schedule": sum(float(row["schedule_hours"] or 0) for row in rows),
             }
         )
     return weeks
+
 
 def teacher_hours_trend_chart_html(weeks):
     chart_w, chart_h = 430, 145
@@ -11673,24 +8379,12 @@ def parse_attendance_time_value(value):
     raise ValueError("Invalid time value")
 
 
-def time_picker_html(name, value="", element_id="", css_class="teacher-time-input", popup=False, lazy_popup=False):
+def time_picker_html(name, value="", element_id="", css_class="teacher-time-input"):
     value = (value or "").strip()
     selected_value = value if re.match(r"^\d{2}:\d{2}$", value) else ""
     input_id = f' id="{html.escape(element_id)}"' if element_id else ""
     selected_hour = selected_value[:2] if selected_value else ""
     selected_minute = selected_value[3:5] if selected_value else ""
-    hidden_input = (
-        f'<input{input_id} class="{html.escape(css_class)} time-picker-value" type="hidden" '
-        f'name="{html.escape(name)}" value="{html.escape(selected_value)}">'
-    )
-    if popup and lazy_popup:
-        display_value = selected_value or "--:--"
-        return f"""
-          <div class="time-picker split-time-picker popup-time-picker lazy-time-picker">
-            {hidden_input}
-            <button class="time-picker-display" type="button" aria-expanded="false">{html.escape(display_value)}</button>
-          </div>
-        """
     hour_options = '<option value="">--</option>' + "".join(
         f'<option value="{hour:02d}" {"selected" if f"{hour:02d}" == selected_hour else ""}>{hour:02d}</option>'
         for hour in range(24)
@@ -11699,26 +8393,15 @@ def time_picker_html(name, value="", element_id="", css_class="teacher-time-inpu
         f'<option value="{minute:02d}" {"selected" if f"{minute:02d}" == selected_minute else ""}>{minute:02d}</option>'
         for minute in range(60)
     )
-    selectors = (
-        f'<select class="time-picker-hour" name="{html.escape(name)}_hour" aria-label="Hour">{hour_options}</select>'
-        f'<span class="time-picker-separator">:</span>'
-        f'<select class="time-picker-minute" name="{html.escape(name)}_minute" aria-label="Minute">{minute_options}</select>'
-    )
-    if popup:
-        display_value = selected_value or "--:--"
-        return f"""
-          <div class="time-picker split-time-picker popup-time-picker">
-            {hidden_input}
-            <button class="time-picker-display" type="button" aria-expanded="false">{html.escape(display_value)}</button>
-            <div class="time-picker-popup" hidden>{selectors}</div>
-          </div>
-        """
     return f"""
       <div class="time-picker split-time-picker">
-        {hidden_input}
-        {selectors}
+        <input{input_id} class="{html.escape(css_class)} time-picker-value" type="hidden" name="{html.escape(name)}" value="{html.escape(selected_value)}">
+        <select class="time-picker-hour" aria-label="Hour">{hour_options}</select>
+        <span class="time-picker-separator">:</span>
+        <select class="time-picker-minute" aria-label="Minute">{minute_options}</select>
       </div>
     """
+
 
 def locked_time_value_html(name, value):
     value = (value or "").strip()
@@ -11727,22 +8410,6 @@ def locked_time_value_html(name, value):
         f'name="{html.escape(name)}" value="{html.escape(value)}">'
         f'<span class="muted-box" style="display:inline-block;min-width:96px;padding:7px 8px">{html.escape(value or "-")}</span>'
     )
-
-
-def shared_time_picker_popup_html():
-    hour_options = '<option value="">--</option>' + "".join(
-        f'<option value="{hour:02d}">{hour:02d}</option>' for hour in range(24)
-    )
-    minute_options = '<option value="">--</option>' + "".join(
-        f'<option value="{minute:02d}">{minute:02d}</option>' for minute in range(60)
-    )
-    return f"""
-      <div class="time-picker-popup shared-time-picker-popup" id="shared-teacher-time-picker" hidden>
-        <select class="time-picker-hour" aria-label="Hour">{hour_options}</select>
-        <span class="time-picker-separator">:</span>
-        <select class="time-picker-minute" aria-label="Minute">{minute_options}</select>
-      </div>
-    """
 
 
 def attendance_event_is_mobile(event):
@@ -11928,171 +8595,28 @@ def update_teacher_status_times(conn, actor, handler, form):
         (project_id, project_id),
     ).fetchall()
     changed = 0
-
-    def submitted_time(field_name):
-        hour = form.get(f"{field_name}_hour", [""])[0].strip()
-        minute = form.get(f"{field_name}_minute", [""])[0].strip()
-        if hour or minute:
-            if not hour or not minute:
-                raise ValueError("Please select both hour and minute")
-            return f"{hour}:{minute}"
-        return form.get(field_name, [""])[0]
-
     for teacher in teachers:
         teacher_id = str(teacher["id"])
         if target_teacher_id and teacher_id != target_teacher_id:
             continue
-        is_principal_self = (
-            actor["role"] == "principal"
-            and actor["person_id"] is not None
-            and int(actor["person_id"]) == int(teacher["id"])
-        )
-        if is_principal_self:
-            current_times = conn.execute(
-                """
-                SELECT
-                    MIN(CASE WHEN event_type = 'checkin' THEN timestamp END) AS first_checkin,
-                    MAX(CASE WHEN event_type = 'checkout' THEN timestamp END) AS last_checkout
-                FROM attendance
-                WHERE person_id = ?
-                  AND role = 'teachers'
-                  AND timestamp LIKE ?
-                """,
-                (teacher["id"], f"{day_text}%"),
-            ).fetchone()
-
-            def submitted_self_time(field_name):
-                field_names = (field_name, f"{field_name}_hour", f"{field_name}_minute")
-                if not any(name in form for name in field_names):
-                    return None
-                value = submitted_time(field_name)
-                return parse_attendance_time_value(value)[:5] if value else ""
-
-            submitted_first_in = submitted_self_time(f"first_in_{teacher_id}")
-            submitted_last_out = submitted_self_time(f"last_out_{teacher_id}")
-            current_first_in = current_times["first_checkin"][11:16] if current_times["first_checkin"] else ""
-            current_last_out = current_times["last_checkout"][11:16] if current_times["last_checkout"] else ""
-            if (
-                submitted_first_in is not None and submitted_first_in != current_first_in
-            ) or (
-                submitted_last_out is not None and submitted_last_out != current_last_out
-            ):
-                raise ValueError("Principals cannot edit their own IN/OUT times")
-        else:
-            if upsert_teacher_attendance_time(conn, actor, handler, teacher, day_text, "checkin", submitted_time(f"first_in_{teacher_id}")):
-                changed += 1
-            if upsert_teacher_attendance_time(conn, actor, handler, teacher, day_text, "checkout", submitted_time(f"last_out_{teacher_id}")):
-                changed += 1
+        if upsert_teacher_attendance_time(conn, actor, handler, teacher, day_text, "checkin", form.get(f"first_in_{teacher_id}", [""])[0]):
+            changed += 1
+        if upsert_teacher_attendance_time(conn, actor, handler, teacher, day_text, "checkout", form.get(f"last_out_{teacher_id}", [""])[0]):
+            changed += 1
         if upsert_teacher_schedule_times(
             conn,
             actor,
             handler,
             teacher,
             day_text,
-            submitted_time(f"schedule_in_{teacher_id}"),
-            submitted_time(f"schedule_out_{teacher_id}"),
+            form.get(f"schedule_in_{teacher_id}", [""])[0],
+            form.get(f"schedule_out_{teacher_id}", [""])[0],
         ):
             changed += 1
     return day_text, changed
 
 
-def teacher_recent_records_rows_html(conn, selected_date, project_id):
-    next_date = (datetime.strptime(selected_date, "%Y-%m-%d").date() + timedelta(days=1)).strftime("%Y-%m-%d")
-    recent_rows = conn.execute(
-        """
-        SELECT attendance.id, attendance.person_id, attendance.name, attendance.event_type, attendance.timestamp,
-               COALESCE(attendance.snapshot_path, '') AS snapshot_path,
-               COALESCE(NULLIF(web_users.display_name, ''), NULLIF(web_users.username, ''), 'System') AS actor_name,
-               COALESCE(audit_log.details_json, '{}') AS audit_details_json
-        FROM attendance
-        JOIN persons ON persons.id = attendance.person_id
-        LEFT JOIN audit_log
-          ON audit_log.id = (
-            SELECT matched_audit.id
-            FROM audit_log AS matched_audit
-            WHERE matched_audit.object_type = 'attendance'
-              AND (matched_audit.object_id = attendance.person_id OR matched_audit.object_id = attendance.id)
-              AND (
-                matched_audit.action LIKE '%' || attendance.event_type
-                OR matched_audit.details_json LIKE '%"event_type": "' || attendance.event_type || '"%'
-              )
-            ORDER BY matched_audit.created_at DESC, matched_audit.id DESC
-            LIMIT 1
-          )
-        LEFT JOIN web_users ON web_users.id = audit_log.actor_user_id
-        WHERE attendance.role = 'teachers'
-          AND attendance.timestamp >= ? AND attendance.timestamp < ?
-          AND persons.project_id = ?
-        ORDER BY attendance.timestamp DESC, attendance.id DESC
-        LIMIT 40
-        """,
-        (f"{selected_date} 00:00:00", f"{next_date} 00:00:00", project_id),
-    ).fetchall()
-    teacher_audit_rows = conn.execute(
-        """
-        SELECT audit_log.*, COALESCE(web_users.display_name, web_users.username, 'System') AS actor_name
-        FROM audit_log
-        LEFT JOIN web_users ON web_users.id = audit_log.actor_user_id
-        JOIN persons AS audit_person
-          ON audit_person.id = CAST(audit_log.object_id AS INTEGER)
-         AND audit_person.role = 'teachers'
-         AND audit_person.project_id = ?
-        WHERE audit_log.created_at >= ? AND audit_log.created_at < ?
-          AND (
-            audit_log.action IN ('edit_teacher_checkin', 'edit_teacher_checkout', 'add_teacher_checkin', 'add_teacher_checkout', 'edit_teacher_schedule_time')
-            OR audit_log.details_json LIKE '%"role": "teachers"%'
-          )
-        ORDER BY audit_log.created_at DESC, audit_log.id DESC
-        LIMIT 80
-        """,
-        (project_id, f"{selected_date} 00:00:00", f"{next_date} 00:00:00"),
-    ).fetchall()
-    recent_items = []
-    for row in recent_rows:
-        try:
-            details = json.loads(row["audit_details_json"] or "{}")
-        except json.JSONDecodeError:
-            details = {}
-        snapshot_path = row["snapshot_path"] or ""
-        photo = "-"
-        if snapshot_path:
-            media_url = f"/media/{file_path_token(snapshot_path)}"
-            photo = f'<a href="{html.escape(media_url)}" target="_blank"><img src="{html.escape(media_url)}" alt="" loading="lazy" decoding="async" style="width:54px;height:54px;object-fit:cover;border-radius:6px;border:1px solid var(--line)"></a>'
-        source_value = details.get("source") or ("mobile_face" if snapshot_path else "")
-        recent_items.append({
-            "time": row["timestamp"], "teacher": row["name"],
-            "event": EVENT_LABELS.get(row["event_type"], row["event_type"]),
-            "by": row["actor_name"] or "System", "field": "", "old": "", "new": "",
-            "source": attendance_source_label(source_value) if source_value else "-",
-            "device": details.get("mobile_device_name") or details.get("device_name") or "-", "photo": photo,
-        })
-    for row in teacher_audit_rows:
-        try:
-            details = json.loads(row["details_json"] or "{}")
-        except json.JSONDecodeError:
-            details = {}
-        recent_items.append({
-            "time": row["created_at"], "teacher": details.get("person_name") or "",
-            "event": "Modification" if row["action"].startswith("edit_") else "Ajout",
-            "by": row["actor_name"] or details.get("operator_name") or "System",
-            "field": details.get("field") or row["action"],
-            "old": details.get("old_value") or ("-" if row["action"].startswith("add_teacher_") else ""),
-            "new": details.get("new_value") or details.get("timestamp") or "",
-            "source": attendance_source_label(details.get("source") or "manual_edit"),
-            "device": details.get("device_name") or details.get("mobile_device_name") or "-", "photo": "-",
-        })
-    recent_items = sorted(recent_items, key=lambda item: item["time"], reverse=True)[:80]
-    return "".join(
-        f"<tr><td>{html.escape(date_with_weekday_letter(item['time']))}</td>"
-        f"<td>{html.escape(item['teacher'])}</td><td>{html.escape(item['event'])}</td>"
-        f"<td>{html.escape(item['by'])}</td><td>{html.escape(item['field'])}</td>"
-        f"<td>{html.escape(item['old'])}</td><td>{html.escape(item['new'])}</td>"
-        f"<td>{html.escape(item['source'])}</td><td>{html.escape(item['device'])}</td>"
-        f"<td>{item['photo']}</td></tr>" for item in recent_items
-    )
-
-
-def render_teacher_attendance(user, query, mobile_request=False):
+def render_teacher_attendance(user, query):
     if user["role"] not in STAFF_MOBILE_ATTENDANCE_ROLES:
         return html_page("Forbidden", user, '<div class="panel">You are not allowed to view teacher attendance.</div>')
     if user["role"] not in {"principal", "boss"}:
@@ -12102,19 +8626,17 @@ def render_teacher_attendance(user, query, mobile_request=False):
         selected_date = datetime.strptime(selected_date, "%Y-%m-%d").strftime("%Y-%m-%d")
     except ValueError:
         selected_date = today_text()
-    next_date = (datetime.strptime(selected_date, "%Y-%m-%d").date() + timedelta(days=1)).strftime("%Y-%m-%d")
     action_mode = query.get("action", [""])[0]
     if user["role"] == "boss" and action_mode not in {"pay_hours"}:
         action_mode = "pay_hours"
     if user["role"] != "boss":
         action_mode = ""
+    pay_start = query.get("pay_start", [selected_date])[0]
+    pay_end = query.get("pay_end", [selected_date])[0]
     principal_self_panel = ""
     principal_self_script = ""
 
     with connect_db() as conn:
-        saved_start, saved_end = get_teacher_attendance_range(conn, user["id"], selected_date, selected_date)
-        pay_start = query.get("pay_start", [saved_start])[0]
-        pay_end = query.get("pay_end", [saved_end])[0]
         project_id = effective_project_id(conn, user)
         summary = teacher_attendance_day_summary(conn, selected_date, project_id)
         version = teacher_attendance_version(conn, selected_date)
@@ -12126,7 +8648,6 @@ def render_teacher_attendance(user, query, mobile_request=False):
                 ).fetchone()
                 if principal_person:
                     self_start, self_end, self_rows = staff_in_out_rows(conn, int(user["person_id"]), pay_start, pay_end)
-                    pay_start, pay_end = self_start, self_end
                     principal_self_panel = staff_in_out_panel_html(
                         principal_person,
                         self_start,
@@ -12139,89 +8660,78 @@ def render_teacher_attendance(user, query, mobile_request=False):
                     principal_self_panel = '<div class="panel"><div class="alert warn">Ce compte n\'est pas lié à une fiche employé.</div></div>'
             else:
                 principal_self_panel = '<div class="panel"><div class="alert warn">Ce compte n\'est pas lié à une fiche employé.</div></div>'
-        if False:  # Recent records are loaded only by /api/teacher-attendance-recent.
-            recent_rows = conn.execute(
-                """
-                SELECT attendance.id, attendance.person_id, attendance.name, attendance.event_type, attendance.timestamp,
-                       COALESCE(attendance.snapshot_path, '') AS snapshot_path,
-                       COALESCE((
-                           SELECT
-                             CASE
-                               WHEN audit_log.details_json LIKE '%"source": "desktop"%'
-                               THEN attendance.name
-                               ELSE COALESCE(NULLIF(web_users.display_name, ''), NULLIF(web_users.username, ''), 'System')
-                             END
-                           FROM audit_log
-                           LEFT JOIN web_users ON web_users.id = audit_log.actor_user_id
-                           WHERE audit_log.object_type = 'attendance'
-                             AND (audit_log.object_id = attendance.person_id OR audit_log.object_id = attendance.id)
-                             AND (
-                               audit_log.action LIKE '%' || attendance.event_type
-                               OR audit_log.details_json LIKE '%"event_type": "' || attendance.event_type || '"%'
-                             )
-                             AND (
-                               audit_log.created_at <= attendance.timestamp
-                               OR audit_log.details_json LIKE '%' || attendance.timestamp || '%'
-                             )
-                           ORDER BY audit_log.created_at DESC, audit_log.id DESC
-                           LIMIT 1
-                         ), 'System') AS actor_name,
-                       COALESCE((
-                           SELECT audit_log.details_json
-                           FROM audit_log
-                           LEFT JOIN web_users ON web_users.id = audit_log.actor_user_id
-                           WHERE audit_log.object_type = 'attendance'
-                             AND (audit_log.object_id = attendance.person_id OR audit_log.object_id = attendance.id)
-                             AND (
-                               audit_log.action LIKE '%' || attendance.event_type
-                               OR audit_log.details_json LIKE '%"event_type": "' || attendance.event_type || '"%'
-                             )
-                             AND (
-                               audit_log.created_at <= attendance.timestamp
-                               OR audit_log.details_json LIKE '%' || attendance.timestamp || '%'
-                             )
-                           ORDER BY audit_log.created_at DESC, audit_log.id DESC
-                           LIMIT 1
-                         ), '{}') AS audit_details_json
-                FROM attendance
-                JOIN persons ON persons.id = attendance.person_id
-                WHERE attendance.role = 'teachers'
-                  AND attendance.timestamp >= ? AND attendance.timestamp < ?
-                  AND persons.project_id = ?
-                ORDER BY attendance.timestamp DESC, attendance.id DESC
-                LIMIT 40
-                """,
-                (f"{selected_date} 00:00:00", f"{next_date} 00:00:00", project_id),
-            ).fetchall()
-            teacher_audit_rows = conn.execute(
-                """
-                SELECT audit_log.*, COALESCE(web_users.display_name, web_users.username, 'System') AS actor_name
-                FROM audit_log
-                LEFT JOIN web_users ON web_users.id = audit_log.actor_user_id
-                JOIN persons AS audit_person
-                  ON audit_person.id = CAST(audit_log.object_id AS INTEGER)
-                 AND audit_person.role = 'teachers'
-                 AND audit_person.project_id = ?
-                WHERE audit_log.created_at >= ? AND audit_log.created_at < ?
-                  AND (
-                    audit_log.action IN ('edit_teacher_checkin', 'edit_teacher_checkout', 'add_teacher_checkin', 'add_teacher_checkout', 'edit_teacher_schedule_time')
-                    OR audit_log.details_json LIKE '%"role": "teachers"%'
-                  )
-                ORDER BY audit_log.created_at DESC, audit_log.id DESC
-                LIMIT 80
-                """,
-                (project_id, f"{selected_date} 00:00:00", f"{next_date} 00:00:00"),
-            ).fetchall()
-        else:
-            recent_rows = []
-            teacher_audit_rows = []
+        recent_rows = conn.execute(
+            """
+            SELECT attendance.id, attendance.person_id, attendance.name, attendance.event_type, attendance.timestamp,
+                   COALESCE(attendance.snapshot_path, '') AS snapshot_path,
+                   COALESCE((
+                       SELECT
+                         CASE
+                           WHEN audit_log.details_json LIKE '%"source": "desktop"%'
+                           THEN attendance.name
+                           ELSE COALESCE(NULLIF(web_users.display_name, ''), NULLIF(web_users.username, ''), 'System')
+                         END
+                       FROM audit_log
+                       LEFT JOIN web_users ON web_users.id = audit_log.actor_user_id
+                       WHERE audit_log.object_type = 'attendance'
+                         AND (audit_log.object_id = attendance.person_id OR audit_log.object_id = attendance.id)
+                         AND (
+                           audit_log.action LIKE '%' || attendance.event_type
+                           OR audit_log.details_json LIKE '%"event_type": "' || attendance.event_type || '"%'
+                         )
+                         AND (
+                           audit_log.created_at <= attendance.timestamp
+                           OR audit_log.details_json LIKE '%' || attendance.timestamp || '%'
+                         )
+                       ORDER BY audit_log.created_at DESC, audit_log.id DESC
+                       LIMIT 1
+                     ), 'System') AS actor_name,
+                   COALESCE((
+                       SELECT audit_log.details_json
+                       FROM audit_log
+                       LEFT JOIN web_users ON web_users.id = audit_log.actor_user_id
+                       WHERE audit_log.object_type = 'attendance'
+                         AND (audit_log.object_id = attendance.person_id OR audit_log.object_id = attendance.id)
+                         AND (
+                           audit_log.action LIKE '%' || attendance.event_type
+                           OR audit_log.details_json LIKE '%"event_type": "' || attendance.event_type || '"%'
+                         )
+                         AND (
+                           audit_log.created_at <= attendance.timestamp
+                           OR audit_log.details_json LIKE '%' || attendance.timestamp || '%'
+                         )
+                       ORDER BY audit_log.created_at DESC, audit_log.id DESC
+                       LIMIT 1
+                     ), '{}') AS audit_details_json
+            FROM attendance
+            JOIN persons ON persons.id = attendance.person_id
+            WHERE attendance.role = 'teachers' AND attendance.timestamp LIKE ?
+              AND persons.project_id = ?
+            ORDER BY attendance.timestamp DESC, attendance.id DESC
+            LIMIT 40
+            """,
+            (f"{selected_date}%", project_id),
+        ).fetchall()
+        teacher_audit_rows = conn.execute(
+            """
+            SELECT audit_log.*, COALESCE(web_users.display_name, web_users.username, 'System') AS actor_name
+            FROM audit_log
+            LEFT JOIN web_users ON web_users.id = audit_log.actor_user_id
+            WHERE audit_log.created_at LIKE ?
+              AND (
+                audit_log.action IN ('edit_teacher_checkin', 'edit_teacher_checkout', 'add_teacher_checkin', 'add_teacher_checkout', 'edit_teacher_schedule_time')
+                OR audit_log.details_json LIKE '%"role": "teachers"%'
+              )
+            ORDER BY audit_log.created_at DESC, audit_log.id DESC
+            LIMIT 80
+            """,
+            (f"{selected_date}%",),
+        ).fetchall()
         pay_start, pay_end, pay_days, pay_rows = teacher_pay_hours_summary(conn, pay_start, pay_end, project_id) if action_mode == "pay_hours" else (pay_start, pay_end, [], [])
-        if action_mode == "pay_hours" or user["role"] == "principal":
-            set_teacher_attendance_range(conn, user["id"], pay_start, pay_end)
+        trend_weeks = teacher_six_week_hours_summary(conn, selected_date, project_id)
 
     show_teacher_work_data = user["role"] == "boss"
     show_teacher_schedule_out = user["role"] in {"principal", "boss"}
-    lazy_teacher_picker = not mobile_request
     teacher_rows = []
     for teacher in summary["teachers"]:
         status_class = "present" if teacher["status"] == "P" else "absent"
@@ -12229,16 +8739,15 @@ def render_teacher_attendance(user, query, mobile_request=False):
         teacher_photo_html = '<span class="teacher-status-photo empty"></span>'
         if latest_snapshot:
             media_url = f"/media/{file_path_token(latest_snapshot)}"
-            teacher_photo_html = f'<a class="teacher-status-photo" href="{html.escape(media_url)}" target="_blank"><img src="{html.escape(media_url)}" alt="" loading="lazy" decoding="async"></a>'
+            teacher_photo_html = f'<a class="teacher-status-photo" href="{html.escape(media_url)}" target="_blank"><img src="{html.escape(media_url)}" alt=""></a>'
         first_in_value = teacher["first_checkin"][11:16] if teacher["first_checkin"] else ""
         last_out_value = teacher["last_checkout"][11:16] if teacher["last_checkout"] else ""
         first_in_name = f"first_in_{teacher['id']}"
         last_out_name = f"last_out_{teacher['id']}"
-        first_in_picker = time_picker_html(first_in_name, first_in_value, popup=True, lazy_popup=lazy_teacher_picker)
-        last_out_picker = time_picker_html(last_out_name, last_out_value, popup=True, lazy_popup=lazy_teacher_picker)
-        schedule_in_picker = time_picker_html(f"schedule_in_{teacher['id']}", teacher["schedule_in"], popup=True, lazy_popup=lazy_teacher_picker)
-        schedule_out_picker = time_picker_html(f"schedule_out_{teacher['id']}", teacher["schedule_out"], popup=True, lazy_popup=lazy_teacher_picker)
-        schedule_out_cell = f'<td class="schedule-out-cell">{schedule_out_picker}</td>' if show_teacher_schedule_out else ""
+        first_in_picker = time_picker_html(first_in_name, first_in_value)
+        last_out_picker = time_picker_html(last_out_name, last_out_value)
+        schedule_in_picker = time_picker_html(f"schedule_in_{teacher['id']}", teacher["schedule_in"])
+        schedule_out_cell = f"<td>{time_picker_html(f'schedule_out_{teacher['id']}', teacher['schedule_out'])}</td>" if show_teacher_schedule_out else ""
         work_hours_cell = f'<td class="work-hours-cell">{html.escape(teacher["work_hours"])}</td>' if show_teacher_work_data else ""
         delete_day_button = ""
         if user["role"] == "boss":
@@ -12246,8 +8755,8 @@ def render_teacher_attendance(user, query, mobile_request=False):
                 f'<button class="btn red teacher-row-delete" type="submit" '
                 f'formaction="/teacher-attendance/delete-day" formmethod="post" '
                 f'name="delete_teacher_id" value="{teacher["id"]}" '
-                f'onclick="return confirm(\'Delete all attendance records for this employee and date?\')">'
-                f'SUP.</button>'
+                f'onclick="return confirm(\'Delete all attendance records for {html.escape(teacher["name"], quote=True)} on {html.escape(selected_date, quote=True)} ?\')">'
+                f'Delete day</button>'
             )
         teacher_rows.append(
             f"""
@@ -12259,11 +8768,10 @@ def render_teacher_attendance(user, query, mobile_request=False):
               <td>{schedule_in_picker}</td>
               {schedule_out_cell}
               {work_hours_cell}
-              <td class="teacher-action-cell"><div class="teacher-row-actions"><button class="btn primary teacher-row-save" type="submit" name="save_teacher_id" value="{teacher['id']}">SAV.</button>{delete_day_button}</div></td>
+              <td><div class="teacher-row-actions"><button class="btn primary teacher-row-save" type="submit" name="save_teacher_id" value="{teacher['id']}">Save</button>{delete_day_button}</div></td>
             </tr>
             """
         )
-    shared_time_picker_html = shared_time_picker_popup_html() if lazy_teacher_picker else ""
 
     recent_items = []
     for row in recent_rows:
@@ -12275,7 +8783,7 @@ def render_teacher_attendance(user, query, mobile_request=False):
         snapshot_html = ""
         if snapshot_path:
             media_url = f"/media/{file_path_token(snapshot_path)}"
-            snapshot_html = f'<a href="{html.escape(media_url)}" target="_blank"><img src="{html.escape(media_url)}" alt="" loading="lazy" decoding="async" style="width:54px;height:54px;object-fit:cover;border-radius:6px;border:1px solid var(--line)"></a>'
+            snapshot_html = f'<a href="{html.escape(media_url)}" target="_blank"><img src="{html.escape(media_url)}" alt="" style="width:54px;height:54px;object-fit:cover;border-radius:6px;border:1px solid var(--line)"></a>'
         source_value = audit_details.get("source") or ("mobile_face" if snapshot_path else "")
         source_label = attendance_source_label(source_value) if source_value else "-"
         device_name = audit_details.get("mobile_device_name") or audit_details.get("device_name") or "-"
@@ -12320,7 +8828,7 @@ def render_teacher_attendance(user, query, mobile_request=False):
     recent_items = sorted(recent_items, key=lambda item: item["time"], reverse=True)[:80]
     recent_html = "".join(
         f"<tr>"
-        f"<td>{html.escape(date_with_weekday_letter(item['time']))}</td>"
+        f"<td>{html.escape(item['time'])}</td>"
         f"<td>{html.escape(item['teacher'])}</td>"
         f"<td>{html.escape(item['event'])}</td>"
         f"<td>{html.escape(item['by'])}</td>"
@@ -12333,7 +8841,7 @@ def render_teacher_attendance(user, query, mobile_request=False):
         f"</tr>"
         for item in recent_items
     )
-    pay_day_headers = "".join(f"<th>{html.escape(date_with_weekday_letter(day, short=True))}</th>" for day in pay_days)
+    pay_day_headers = "".join(f"<th>{html.escape(day[5:])}</th>" for day in pay_days)
     pay_actual_total = sum(float(row["hours"] or 0) for row in pay_rows)
     pay_schedule_total = sum(float(row["schedule_hours"] or 0) for row in pay_rows)
     pay_rows_html = "".join(
@@ -12347,11 +8855,6 @@ def render_teacher_attendance(user, query, mobile_request=False):
     )
     pay_hours_html = ""
     if action_mode == "pay_hours":
-        work_hours_export_button = "" if mobile_request else (
-            f'<a class="btn primary teacher-hours-export" '
-            f'href="/teacher-attendance/work-hours.xlsx?start={quote(pay_start)}&end={quote(pay_end)}">'
-            f'EXPORTER EXCEL</a>'
-        )
         pay_hours_html = f"""
         <form method="get" action="/teacher-attendance" class="pay-hours-form">
           <input type="hidden" name="action" value="pay_hours">
@@ -12364,15 +8867,15 @@ def render_teacher_attendance(user, query, mobile_request=False):
             <label>End</label>
             <input type="date" name="pay_end" value="{html.escape(pay_end)}">
           </div>
-          <div class="teacher-hours-export-wrap">{work_hours_export_button}</div>
+          <button class="btn primary" type="submit">Afficher</button>
         </form>
-        <div class="stats pay-hours-summary" style="margin-top:10px">
-          <div class="stat"><div class="muted">Work hours total <span class="hours-short-code">W-T</span></div><div class="value">{pay_actual_total:.2f}</div></div>
-          <div class="stat"><div class="muted">Schedule hours Total <span class="hours-short-code">S-T</span></div><div class="value">{pay_schedule_total:.2f}</div></div>
+        <div class="stats" style="margin-top:10px;grid-template-columns:repeat(auto-fit,minmax(190px,220px))">
+          <div class="stat"><div class="muted">WORK HOURS TOTAL</div><div class="value">{pay_actual_total:.2f}</div></div>
+          <div class="stat"><div class="muted">SCHEDULE HOURS TOTAL</div><div class="value">{pay_schedule_total:.2f}</div></div>
         </div>
-        <div class="table-wrap pay-hours-table boss-ten-row-table" data-default-table-rows="10">
+        <div class="table-wrap pay-hours-table">
           <table>
-            <thead><tr><th>Teacher</th><th>W-T</th><th>S-T</th>{pay_day_headers}<th>Days</th><th>Events</th><th>Open</th></tr></thead>
+            <thead><tr><th>Teacher</th><th>WORK HOURS TOTAL</th><th>SCHEDULE HOURS TOTAL</th>{pay_day_headers}<th>Days</th><th>Events</th><th>Open</th></tr></thead>
             <tbody>{pay_rows_html or f'<tr><td colspan="{6 + len(pay_days)}" class="muted">No teachers found.</td></tr>'}</tbody>
           </table>
         </div>
@@ -12396,43 +8899,30 @@ def render_teacher_attendance(user, query, mobile_request=False):
           {load_schedule_html}
           {pay_hours_html}
         """
-    teacher_trend_chart = ""
-    if show_teacher_work_data and not mobile_request:
-        teacher_trend_chart = """
-          <button class="btn ghost" type="button" id="teacher-trend-load">AFFICHER TENDANCE 6 SEMAINES</button>
-          <div id="teacher-trend-result" hidden aria-live="polite"></div>
-        """
+    teacher_trend_chart = teacher_hours_trend_chart_html(trend_weeks) if show_teacher_work_data else ""
     teacher_schedule_out_header = "<th>SCHEDULE OUT</th>" if show_teacher_schedule_out else ""
     teacher_work_headers = "<th>WORK HOURS</th>" if show_teacher_work_data else ""
     teacher_status_colspan = 8 if show_teacher_work_data else (7 if show_teacher_schedule_out else 6)
-    teacher_status_date_button = ""
-    teacher_table_rows_attr = ' data-default-table-rows="10"' if user["role"] == "boss" else ""
+    teacher_status_date_button = "" if user["role"] == "principal" else '<button class="btn primary" type="submit">Afficher</button>'
     recent_records_html = ""
     if user["role"] == "boss":
-        recent_body_html = '<tr><td colspan="10" class="muted">Cliquez sur le bouton pour charger les registres.</td></tr>'
-        recent_tbody_attr = ' id="mobile-teacher-recent-body"'
-        recent_table_html = f"""
-      <div class="table-wrap boss-ten-row-table{' mobile-teacher-recent-table' if mobile_request else ''}"{' ' if mobile_request else ' data-default-table-rows="10"'}>
+        recent_records_html = f"""
+    <div class="panel" style="margin-top:16px">
+      <h3>Recent teacher records</h3>
+      <div class="table-wrap">
         <table>
           <thead><tr><th>Timestamp</th><th>Teacher</th><th>Event</th><th>By</th><th>Field</th><th>Old</th><th>New</th><th>Source</th><th>Device</th><th>Photo</th></tr></thead>
-          <tbody{recent_tbody_attr}>{recent_body_html}</tbody>
+          <tbody>{recent_html or '<tr><td colspan="10" class="muted">No teacher attendance records for this date.</td></tr>'}</tbody>
         </table>
       </div>
-        """
-        recent_records_html = f"""
-    <details class="mobile-teacher-recent" id="mobile-teacher-recent" style="margin-top:16px">
-      <summary class="btn">REGISTRES RÉCENTS DES ÉDUCATRICES</summary>
-      <div class="panel mobile-teacher-recent-content" style="margin-top:8px">
-        {recent_table_html}
-      </div>
-    </details>
+    </div>
         """
     body = f"""
     <style>
       .teacher-attendance-head {{ display:flex; align-items:start; justify-content:space-between; gap:12px; flex-wrap:wrap; }}
       .teacher-attendance-date {{ display:grid; grid-template-columns:180px auto; gap:8px; align-items:end; }}
-      .teacher-attendance-side {{ display:grid; gap:10px; flex:0 1 400px; min-width:min(100%, 360px); }}
-      .teacher-hours-chart {{ border:1px solid var(--line); border-radius:8px; background:#fbfdff; padding:8px 12px 4px; width:100%; max-width:none; margin-top:-12px; }}
+      .teacher-attendance-side {{ display:grid; gap:10px; min-width:min(100%, 470px); }}
+      .teacher-hours-chart {{ border:1px solid var(--line); border-radius:8px; background:#fbfdff; padding:8px 12px 4px; max-width:470px; margin-top:-12px; }}
       .teacher-hours-chart .arrival-chart {{ height:145px; }}
       .teacher-actual-line {{ stroke:var(--blue); }}
       .teacher-schedule-line {{ stroke:var(--green); }}
@@ -12440,25 +8930,12 @@ def render_teacher_attendance(user, query, mobile_request=False):
       .teacher-chart-legend span {{ width:16px; height:3px; border-radius:999px; display:inline-block; }}
       .teacher-chart-legend .actual {{ background:var(--blue); }}
       .teacher-chart-legend .schedule {{ background:var(--green); }}
-      .mobile-teacher-recent > summary {{ list-style:none; cursor:pointer; width:auto; }}
-      .mobile-teacher-recent > summary::-webkit-details-marker {{ display:none; }}
-      .mobile-teacher-recent-table {{ max-height:65vh; overflow:auto; }}
-      .mobile-teacher-recent-content {{ padding:8px; }}
-      .teacher-action-panel {{ display:grid; gap:12px; flex:1 1 780px; min-width:min(100%, 520px); }}
+      .teacher-action-panel {{ display:grid; gap:12px; min-width:min(100%, 520px); }}
       .teacher-action-buttons {{ display:flex; gap:12px; flex-wrap:wrap; align-items:center; }}
       .teacher-action-buttons .btn {{ min-width:160px; justify-content:center; }}
-      .teacher-action-panel .pay-hours-form button[type="submit"], .teacher-status-head .teacher-attendance-date button[type="submit"] {{ display:none !important; }}
       .pay-hours-form {{ display:flex; gap:10px; flex-wrap:wrap; align-items:end; }}
-      .hours-short-code {{ color:var(--text); font-size:13px; font-weight:900; }}
       .pay-hours-form input[type="date"] {{ min-width:160px; }}
-      .pay-hours-table {{ margin-top:10px; width:100%; max-width:none; max-height:704px; overflow:auto; }}
-      .teacher-hours-export-wrap {{ display:flex; align-items:flex-end; }}
-      .teacher-hours-export {{ white-space:nowrap; }}
-      .pay-hours-summary {{ grid-template-columns:repeat(auto-fit,minmax(270px,320px)); }}
-      .pay-hours-summary .stat {{ min-width:0; width:100%; }}
-      .pay-hours-summary .stat .muted {{ white-space:normal; overflow-wrap:anywhere; line-height:1.25; }}
-      .pay-hours-table tbody tr {{ height:44px; }}
-      .pay-hours-table table {{ width:100%; min-width:max-content; }}
+      .pay-hours-table {{ margin-top:10px; max-width:760px; }}
       .teacher-status-head {{ display:flex; align-items:end; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:10px; }}
       .teacher-status-head h3 {{ margin:0; }}
       .teacher-status-panel h3 {{ font-size:20px; }}
@@ -12475,33 +8952,14 @@ def render_teacher_attendance(user, query, mobile_request=False):
       .split-time-picker {{ min-width:132px; }}
       .split-time-picker select {{ width:56px; }}
       .time-picker-separator {{ font-weight:800; color:#52616e; }}
-      .teacher-status-table .popup-time-picker {{ min-width:78px; position:relative; }}
-      .time-picker-display {{ min-width:72px; min-height:36px; padding:6px 9px; border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--text); font:inherit; font-weight:800; cursor:pointer; }}
-      .time-picker-display:hover, .time-picker-display[aria-expanded="true"] {{ border-color:var(--blue); background:#eef7ff; }}
-      .time-picker-display:focus-visible {{ outline:3px solid rgba(37, 125, 190, .22); outline-offset:2px; }}
-      .time-picker-popup {{ position:fixed; z-index:10050; display:flex; align-items:center; gap:5px; padding:9px; border:1px solid #b8c9d8; border-radius:9px; background:#fff; box-shadow:0 12px 30px rgba(25, 48, 72, .22); }}
-      .time-picker-popup[hidden] {{ display:none; }}
-      .time-picker-popup select {{ width:64px; min-height:40px; font-size:16px; }}
       .teacher-status-actions {{ display:flex; justify-content:flex-end; margin-top:12px; }}
-      .teacher-status-table .teacher-action-cell {{ width:1%; padding-left:4px; padding-right:4px; white-space:nowrap; }}
-      @media (min-width:761px) {{
-        .teacher-attendance-head {{ display:grid; grid-template-columns:minmax(0,1fr) minmax(360px,430px); grid-template-areas:"empty chart" "actions actions"; width:100%; }}
-        .teacher-attendance-side {{ grid-area:chart; justify-self:end; width:100%; }}
-        .teacher-action-panel {{ grid-area:actions; width:100%; max-width:none; margin-top:14px; }}
-        .teacher-action-panel .pay-hours-table {{ width:100%; max-width:none; }}
-      }}
-      .teacher-status-table .work-hours-cell, .teacher-status-table .schedule-out-cell {{ width:82px; max-width:82px; padding-left:4px; padding-right:4px; }}
-      .teacher-row-actions {{ display:flex; gap:3px; flex-wrap:nowrap; align-items:center; white-space:nowrap; }}
-      .teacher-row-actions .btn {{ width:auto; min-width:0; min-height:28px; padding:3px 5px; font-size:11px; line-height:1; white-space:nowrap; }}
-      .boss-ten-row-table {{ overflow:auto; scrollbar-gutter:stable; }}
-      .boss-ten-row-table thead th {{ position:sticky; top:0; z-index:2; background:#eef4f7; box-shadow:0 1px 0 var(--line); }}
+      .teacher-row-actions {{ display:flex; gap:6px; flex-wrap:wrap; align-items:center; }}
+      .teacher-row-actions .btn {{ padding:6px 9px; min-height:34px; }}
       @media (max-width:720px) {{
         .teacher-attendance-head, .teacher-attendance-date, .teacher-attendance-side, .teacher-status-head {{ display:grid; grid-template-columns:1fr; }}
         .teacher-action-buttons .btn, .pay-hours-form input[type="date"] {{ width:100%; }}
         .teacher-status-table table {{ font-size:15px; }}
         .teacher-status-table .badge {{ font-size:14px; }}
-        .pay-hours-table {{ max-height:none; }}
-        .pay-hours-summary {{ grid-template-columns:1fr; }}
         .teacher-time-input {{ width:100%; min-width:96px; }}
       }}
     </style>
@@ -12509,6 +8967,7 @@ def render_teacher_attendance(user, query, mobile_request=False):
     <div class="panel">
       <div class="teacher-attendance-head">
         <div class="teacher-action-panel">
+          <h2>Présences des éducatrices</h2>
           {teacher_action_buttons_html}
         </div>
         <div class="teacher-attendance-side">
@@ -12518,6 +8977,7 @@ def render_teacher_attendance(user, query, mobile_request=False):
     </div>
     <div class="panel teacher-status-panel" style="margin-top:8px">
       <div class="teacher-status-head">
+        <h3>Teacher status</h3>
         <form method="get" action="/teacher-attendance" class="teacher-attendance-date">
           <input type="hidden" name="action" value="{html.escape(action_mode)}">
           <input type="hidden" name="pay_start" value="{html.escape(pay_start)}">
@@ -12534,7 +8994,7 @@ def render_teacher_attendance(user, query, mobile_request=False):
         <input type="hidden" name="action" value="{html.escape(action_mode)}">
         <input type="hidden" name="pay_start" value="{html.escape(pay_start)}">
         <input type="hidden" name="pay_end" value="{html.escape(pay_end)}">
-      <div class="table-wrap teacher-status-table boss-ten-row-table"{teacher_table_rows_attr}>
+      <div class="table-wrap teacher-status-table">
         <table>
           <thead><tr><th>Teacher</th><th>Status</th><th>First in</th><th>Last out</th><th>SCHEDULE IN</th>{teacher_schedule_out_header}{teacher_work_headers}<th>Action</th></tr></thead>
           <tbody>{''.join(teacher_rows) or f'<tr><td colspan="{teacher_status_colspan}" class="muted">No teachers found.</td></tr>'}</tbody>
@@ -12542,71 +9002,12 @@ def render_teacher_attendance(user, query, mobile_request=False):
       </div>
       </form>
     </div>
-    {shared_time_picker_html}
     {recent_records_html}
     {principal_self_script}
     <script>
       (function() {{
-        document.querySelectorAll('[data-default-table-rows]').forEach(function(wrapper) {{
-          const limit = Number(wrapper.getAttribute('data-default-table-rows')) || 10;
-          const table = wrapper.querySelector('table');
-          const rows = table ? Array.from(table.querySelectorAll('tbody > tr')) : [];
-          if (!table || rows.length <= limit) return;
-          const head = table.querySelector('thead');
-          let visibleHeight = head ? head.getBoundingClientRect().height : 0;
-          rows.slice(0, limit).forEach(function(row) {{
-            visibleHeight += row.getBoundingClientRect().height;
-          }});
-          wrapper.style.maxHeight = Math.ceil(visibleHeight + 2) + 'px';
-          wrapper.style.overflow = 'auto';
-        }});
         let version = {version};
         const selectedDate = "{html.escape(selected_date)}";
-        const trendButton = document.getElementById('teacher-trend-load');
-        const trendResult = document.getElementById('teacher-trend-result');
-        if (trendButton && trendResult) {{
-          trendButton.addEventListener('click', function() {{
-            if (trendButton.dataset.loaded === '1' || trendButton.disabled) return;
-            trendButton.disabled = true;
-            trendButton.textContent = 'CHARGEMENT...';
-            fetch('/api/teacher-attendance-trend?date=' + encodeURIComponent(selectedDate), {{
-              credentials: 'same-origin',
-              cache: 'no-store'
-            }})
-            .then(response => response.ok ? response.json() : Promise.reject(new Error('trend')))
-            .then(data => {{
-              if (!data || !data.ok) throw new Error('trend');
-              trendResult.innerHTML = data.html;
-              trendResult.hidden = false;
-              trendButton.dataset.loaded = '1';
-              trendButton.hidden = true;
-            }})
-            .catch(() => {{
-              trendButton.disabled = false;
-              trendButton.textContent = 'RÉESSAYER TENDANCE 6 SEMAINES';
-            }});
-          }});
-        }}
-        const mobileRecent = document.getElementById('mobile-teacher-recent');
-        const mobileRecentBody = document.getElementById('mobile-teacher-recent-body');
-        if (mobileRecent && mobileRecentBody) {{
-          mobileRecent.addEventListener('toggle', function() {{
-            if (!mobileRecent.open) return;
-            mobileRecentBody.innerHTML = '<tr><td colspan="10" class="muted">Chargement...</td></tr>';
-            fetch('/api/teacher-attendance-recent?date=' + encodeURIComponent(selectedDate), {{
-              credentials: 'same-origin',
-              cache: 'no-store'
-            }})
-            .then(response => response.ok ? response.json() : Promise.reject(new Error('recent records')))
-            .then(data => {{
-              if (!data || !data.ok) throw new Error('recent records');
-              mobileRecentBody.innerHTML = data.html || '<tr><td colspan="10" class="muted">No teacher attendance records for this date.</td></tr>';
-            }})
-            .catch(() => {{
-              mobileRecentBody.innerHTML = '<tr><td colspan="10" class="muted">Chargement impossible. Touchez le bouton pour réessayer.</td></tr>';
-            }});
-          }});
-        }}
         function pollTeacherAttendance() {{
           fetch('/api/teacher-attendance-version?date=' + encodeURIComponent(selectedDate), {{
             credentials: 'same-origin'
@@ -12626,123 +9027,21 @@ def render_teacher_attendance(user, query, mobile_request=False):
             if (form) form.requestSubmit();
           }});
         }});
-        let openTimePicker = null;
-        function closeOpenTimePicker() {{
-          if (!openTimePicker) return;
-          const popup = openTimePicker.querySelector('.time-picker-popup');
-          const display = openTimePicker.querySelector('.time-picker-display');
-          if (popup) popup.hidden = true;
-          if (display) display.setAttribute('aria-expanded', 'false');
-          openTimePicker = null;
-        }}
         document.querySelectorAll('.split-time-picker').forEach(picker => {{
           const hidden = picker.querySelector('.time-picker-value');
           const hour = picker.querySelector('.time-picker-hour');
           const minute = picker.querySelector('.time-picker-minute');
-          const display = picker.querySelector('.time-picker-display');
-          const popup = picker.querySelector('.time-picker-popup');
           function syncTimePicker() {{
             if (!hidden || !hour || !minute) return;
             if (hour.value === '19' && minute.value && minute.value !== '00') minute.value = '00';
             hidden.value = hour.value && minute.value ? hour.value + ':' + minute.value : '';
-            if (display) display.textContent = hidden.value || '--:--';
             hidden.dispatchEvent(new Event('input', {{ bubbles: true }}));
             hidden.dispatchEvent(new Event('change', {{ bubbles: true }}));
           }}
-          function positionPopup() {{
-            if (!display || !popup || popup.hidden) return;
-            const rect = display.getBoundingClientRect();
-            const popupWidth = popup.offsetWidth || 156;
-            const popupHeight = popup.offsetHeight || 60;
-            let left = Math.min(rect.left, window.innerWidth - popupWidth - 8);
-            let top = rect.bottom + 6;
-            if (top + popupHeight > window.innerHeight - 8) top = Math.max(8, rect.top - popupHeight - 6);
-            popup.style.left = Math.max(8, left) + 'px';
-            popup.style.top = top + 'px';
-          }}
           if (hour) hour.addEventListener('change', syncTimePicker);
-          if (minute) minute.addEventListener('change', function() {{
-            syncTimePicker();
-            if (hour && hour.value && minute.value) closeOpenTimePicker();
-          }});
-          if (display && popup) {{
-            display.addEventListener('click', function(event) {{
-              event.stopPropagation();
-              const willOpen = popup.hidden;
-              closeOpenTimePicker();
-              if (!willOpen) return;
-              popup.hidden = false;
-              display.setAttribute('aria-expanded', 'true');
-              openTimePicker = picker;
-              window.requestAnimationFrame(positionPopup);
-            }});
-            popup.addEventListener('click', event => event.stopPropagation());
-          }}
+          if (minute) minute.addEventListener('change', syncTimePicker);
         }});
-        const sharedTimePopup = document.getElementById('shared-teacher-time-picker');
-        const sharedHour = sharedTimePopup ? sharedTimePopup.querySelector('.time-picker-hour') : null;
-        const sharedMinute = sharedTimePopup ? sharedTimePopup.querySelector('.time-picker-minute') : null;
-        let activeLazyPicker = null;
-        function closeSharedTimePicker() {{
-          if (sharedTimePopup) sharedTimePopup.hidden = true;
-          if (activeLazyPicker) {{
-            const display = activeLazyPicker.querySelector('.time-picker-display');
-            if (display) display.setAttribute('aria-expanded', 'false');
-          }}
-          activeLazyPicker = null;
-        }}
-        function positionSharedTimePicker() {{
-          if (!sharedTimePopup || sharedTimePopup.hidden || !activeLazyPicker) return;
-          const display = activeLazyPicker.querySelector('.time-picker-display');
-          if (!display) return;
-          const rect = display.getBoundingClientRect();
-          const popupWidth = sharedTimePopup.offsetWidth || 156;
-          const popupHeight = sharedTimePopup.offsetHeight || 60;
-          let left = Math.min(rect.left, window.innerWidth - popupWidth - 8);
-          let top = rect.bottom + 6;
-          if (top + popupHeight > window.innerHeight - 8) top = Math.max(8, rect.top - popupHeight - 6);
-          sharedTimePopup.style.left = Math.max(8, left) + 'px';
-          sharedTimePopup.style.top = top + 'px';
-        }}
-        function syncSharedTimePicker() {{
-          if (!activeLazyPicker || !sharedHour || !sharedMinute) return;
-          if (sharedHour.value === '19' && sharedMinute.value && sharedMinute.value !== '00') sharedMinute.value = '00';
-          const hidden = activeLazyPicker.querySelector('.time-picker-value');
-          const display = activeLazyPicker.querySelector('.time-picker-display');
-          if (!hidden) return;
-          hidden.value = sharedHour.value && sharedMinute.value ? sharedHour.value + ':' + sharedMinute.value : '';
-          if (display) display.textContent = hidden.value || '--:--';
-          hidden.dispatchEvent(new Event('input', {{ bubbles: true }}));
-          hidden.dispatchEvent(new Event('change', {{ bubbles: true }}));
-        }}
-        document.querySelectorAll('.lazy-time-picker .time-picker-display').forEach(function(display) {{
-          display.addEventListener('click', function(event) {{
-            event.stopPropagation();
-            const picker = display.closest('.lazy-time-picker');
-            const wasOpen = activeLazyPicker === picker && sharedTimePopup && !sharedTimePopup.hidden;
-            closeOpenTimePicker();
-            closeSharedTimePicker();
-            if (wasOpen || !picker || !sharedTimePopup || !sharedHour || !sharedMinute) return;
-            const hidden = picker.querySelector('.time-picker-value');
-            const value = hidden ? hidden.value : '';
-            sharedHour.value = /^\\d{{2}}:\\d{{2}}$/.test(value) ? value.slice(0, 2) : '';
-            sharedMinute.value = /^\\d{{2}}:\\d{{2}}$/.test(value) ? value.slice(3, 5) : '';
-            activeLazyPicker = picker;
-            sharedTimePopup.hidden = false;
-            display.setAttribute('aria-expanded', 'true');
-            window.requestAnimationFrame(positionSharedTimePicker);
-          }});
-        }});
-        if (sharedHour) sharedHour.addEventListener('change', syncSharedTimePicker);
-        if (sharedMinute) sharedMinute.addEventListener('change', function() {{
-          syncSharedTimePicker();
-          if (sharedHour && sharedHour.value && sharedMinute.value) closeSharedTimePicker();
-        }});
-        if (sharedTimePopup) sharedTimePopup.addEventListener('click', event => event.stopPropagation());
-        document.addEventListener('click', function() {{ closeOpenTimePicker(); closeSharedTimePicker(); }});
-        document.addEventListener('keydown', event => {{ if (event.key === 'Escape') {{ closeOpenTimePicker(); closeSharedTimePicker(); }} }});
-        window.addEventListener('resize', function() {{ closeOpenTimePicker(); closeSharedTimePicker(); }});
-        window.addEventListener('scroll', function() {{ closeOpenTimePicker(); closeSharedTimePicker(); }});        function timeMinutes(value) {{
+        function timeMinutes(value) {{
           const match = /^([01][0-9]|2[0-3]):([0-5][0-9])$/.exec((value || '').trim());
           if (!match) return null;
           return Number(match[1]) * 60 + Number(match[2]);
@@ -12781,57 +9080,12 @@ def render_teacher_attendance(user, query, mobile_request=False):
           const dayTarget = payRow.querySelector('.pay-day-cell[data-pay-day="' + selectedDate + '"]');
           if (dayTarget) dayTarget.textContent = currentHours.toFixed(2);
         }}
-        let dirtyTeacherRow = null;
         document.querySelectorAll('.teacher-status-table tbody tr').forEach(row => {{
           row.querySelectorAll('.teacher-time-input').forEach(input => {{
-            const markDirty = () => {{
-              dirtyTeacherRow = row;
-              row.classList.add('teacher-row-dirty');
-              updateRowWorkHours(row);
-            }};
-            input.addEventListener('input', markDirty);
-            input.addEventListener('change', markDirty);
+            input.addEventListener('input', () => updateRowWorkHours(row));
+            input.addEventListener('change', () => updateRowWorkHours(row));
           }});
         }});
-        const teacherStatusForm = document.querySelector('.teacher-status-form');
-        if (teacherStatusForm) {{
-          const scrollStorageKey = 'teacher-attendance-scroll';
-          const savedScroll = window.sessionStorage.getItem(scrollStorageKey);
-          if (savedScroll !== null) {{
-            window.sessionStorage.removeItem(scrollStorageKey);
-            window.requestAnimationFrame(() => window.scrollTo(0, Number(savedScroll) || 0));
-          }}
-          teacherStatusForm.addEventListener('submit', () => {{
-            window.sessionStorage.setItem(scrollStorageKey, String(window.scrollY));
-            dirtyTeacherRow = null;
-          }});
-          function confirmTeacherRowSwitch(target) {{
-            const targetRow = target.closest('tr[data-teacher-name]');
-            if (!dirtyTeacherRow || !targetRow || targetRow === dirtyTeacherRow) return true;
-            const teacherName = dirtyTeacherRow.dataset.teacherName || 'cette personne';
-            const shouldSave = window.confirm('Les modifications de ' + teacherName + ' ne sont pas enregistrees. Voulez-vous les enregistrer avant de modifier une autre personne ?');
-            if (!shouldSave) {{
-              dirtyTeacherRow.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
-              return false;
-            }}
-            const saveButton = dirtyTeacherRow.querySelector('.teacher-row-save');
-            if (saveButton) teacherStatusForm.requestSubmit(saveButton);
-            return false;
-          }}
-          teacherStatusForm.addEventListener('pointerdown', event => {{
-            const target = event.target;
-            if (!(target instanceof Element)) return;
-            const targetRow = target.closest('tr[data-teacher-name]');
-            if (!dirtyTeacherRow || !targetRow || targetRow === dirtyTeacherRow) return;
-            event.preventDefault();
-            if (confirmTeacherRowSwitch(target) && target instanceof HTMLElement) target.focus({{ preventScroll: true }});
-          }});
-          window.addEventListener('beforeunload', event => {{
-            if (!dirtyTeacherRow) return;
-            event.preventDefault();
-            event.returnValue = '';
-          }});
-        }}
         setInterval(pollTeacherAttendance, 5000);
       }})();
     </script>
@@ -12845,22 +9099,11 @@ def build_attendance_export_xlsx(user, selected_class, selected_date):
     except ValueError:
         selected_date = today_text()
     with connect_db() as conn:
-        project_id = effective_project_id(conn, user)
-        visible_classes = classes_for_user(user, conn)
-        if selected_class != "all" and selected_class not in visible_classes:
-            raise PermissionError("Class outside current user scope")
-        rows = attendance_export_source_rows(
-            conn,
-            selected_date,
-            project_id=project_id,
-            class_name=selected_class,
-        )
+        rows = attendance_export_source_rows(conn, selected_date)
     export_rows = [
         [name, ROLE_LABELS.get(role, role), class_name, timestamp, EVENT_LABELS.get(event_type, event_type), operator_name or attendance_source_label(source), snapshot_path]
         for _person_id, name, role, class_name, timestamp, event_type, snapshot_path, source, operator_name, *_extra in rows
     ]
-    if not export_rows:
-        export_rows = [["Aucun enregistrement pour la date et le groupe sélectionnés.", "", "", "", "", "", ""]]
     summary_rows = build_presence_summary_rows(rows)
     workbook = [
         {
@@ -12890,14 +9133,13 @@ def render_closed_dates(user, query):
       .closed-dates-table {{ width:auto; min-width:0; table-layout:fixed; }}
       .closed-dates-table th, .closed-dates-table td {{ padding:6px 8px; white-space:nowrap; }}
       .closed-date-cell {{ width:118px; }}
-      .closed-action-cell {{ width:78px; padding-left:2px !important; }}
+      .closed-action-cell {{ width:92px; padding-left:2px !important; }}
       .closed-action-cell form {{ margin:0; }}
-      .closed-dates-form .btn,
-      .closed-action-btn {{ min-height:30px; padding:5px 9px; width:auto; font-size:12px; line-height:1; white-space:nowrap; }}
+      .closed-action-btn {{ min-height:30px; padding:4px 7px; width:auto; font-size:12px; line-height:1; }}
     </style>
     <div class="panel">
       <h2>Manage Closed Dates</h2>
-      <form method="post" action="/closed-dates/add" class="toolbar closed-dates-form">
+      <form method="post" action="/closed-dates/add" class="toolbar">
         <div>
           <label>Date</label>
           <input type="date" name="date" required>
@@ -12962,10 +9204,6 @@ def render_users(user, query, account_only=False):
             """
             , (project_id,)
         ).fetchall()
-        deleted_user_archive_count = conn.execute(
-            "SELECT COUNT(*) FROM deleted_user_archives WHERE project_id = ?",
-            (project_id,),
-        ).fetchone()[0] if user["role"] == "boss" else 0
         invited_person_ids = {
             int(row["person_id"])
             for row in conn.execute(
@@ -13030,14 +9268,6 @@ def render_users(user, query, account_only=False):
         flash = (
             "info",
             "Avatars importés: {}. Ignorés: {}.".format(
-                query.get("updated", ["0"])[0],
-                query.get("skipped", ["0"])[0],
-            ),
-        )
-    if query.get("group_icons", [""])[0] == "1":
-        flash = (
-            "info",
-            "Icônes GROUP importées: {}. Ignorées: {}.".format(
                 query.get("updated", ["0"])[0],
                 query.get("skipped", ["0"])[0],
             ),
@@ -13129,7 +9359,7 @@ def render_users(user, query, account_only=False):
         delete_button = ""
         if target["id"] != user["id"] and can_manage_users(user, target):
             delete_button = f"""
-                <form method="post" action="/users/delete" style="display:inline" onsubmit="return confirm('Delete this user?')">
+                <form method="post" action="/users/delete" style="display:inline" onsubmit="return confirm('Delete user {html.escape(target['username'], quote=True)}?')">
                   <input type="hidden" name="id" value="{target['id']}">
                   <button class="btn red" type="submit">Supprimer</button>
                 </form>
@@ -13137,9 +9367,9 @@ def render_users(user, query, account_only=False):
         reset_device_button = ""
         if target["role"] in {"teacher", "children"} and can_manage_users(user, target):
             reset_device_button = f"""
-                <form method="post" action="/users/reset-mobile-device" style="display:inline" onsubmit="return confirm('Reset the mobile device for this user?')">
+                <form method="post" action="/users/reset-mobile-device" style="display:inline" onsubmit="return confirm('Reset mobile device for {html.escape(target['username'], quote=True)}?')">
                   <input type="hidden" name="id" value="{target['id']}">
-                  <button class="btn amber" type="submit">Réinitialiser l’appareil</button>
+                  <button class="btn amber" type="submit">Reset appareil</button>
                 </form>
             """
         edit_button = f'<a class="btn" href="/users/edit?id={target["id"]}">Modifier</a>' if can_manage_users(user, target) or can_reset_user_password(user, target) else ""
@@ -13150,7 +9380,7 @@ def render_users(user, query, account_only=False):
         if can_invite_user:
             action_options.append(f'<option value="invite" data-href="/users?invite_user_id={target["id"]}#invite-user">Inviter</option>')
         if reset_device_button:
-            action_options.append(f'<option value="reset_device" data-id="{target["id"]}" data-confirm="Reset mobile device for {html.escape(target["username"], quote=True)}?">Réinitialiser l’appareil</option>')
+            action_options.append(f'<option value="reset_device" data-id="{target["id"]}" data-confirm="Reset mobile device for {html.escape(target["username"], quote=True)}?">Reset appareil</option>')
         if delete_button:
             action_options.append(f'<option value="delete" data-id="{target["id"]}" data-confirm="Delete user {html.escape(target["username"], quote=True)}?">Supprimer</option>')
         action_menu = f"""
@@ -13299,7 +9529,7 @@ def render_users(user, query, account_only=False):
         """
     add_person_panel_html = f"""
     <div class="panel">
-      <h3>Ajouter un utilisateur</h3>
+      <h3>Ajouter utilisateur</h3>
       <div class="muted small" style="margin-bottom:8px">Ajouter génère automatiquement une invitation mobile pour terminer l'inscription.</div>
       <form method="post" action="/children/create" class="user-grid children-add-group">
         <input type="hidden" name="return_to" value="/users">
@@ -13312,9 +9542,12 @@ def render_users(user, query, account_only=False):
         </div>
         <div>
           <label>Groupe</label>
-          <input name="class_name" list="account-child-group-options" placeholder="Select or type a new group">
+          <div class="group-field-action">
+            <input name="class_name" list="account-child-group-options" placeholder="Select or type a new group">
+            <button class="group-action-btn" type="button" data-delete-selected-group aria-label="Supprimer groupe">⋯</button>
+          </div>
         </div>
-        <div><label>Courriel d’invitation</label><input name="email" type="email" placeholder="nom@example.com"></div>
+        <div><label>E-MAIL invitation</label><input name="email" type="email" placeholder="nom@example.com"></div>
         <datalist id="account-child-group-options">{class_options}</datalist>
         <div style="display:flex;align-items:end"><button class="btn primary" type="submit">Ajouter</button></div>
       </form>
@@ -13334,11 +9567,11 @@ def render_users(user, query, account_only=False):
         <form method="post" action="/children/import-avatars" enctype="multipart/form-data" class="btn-row children-avatar-form" style="align-items:end">
           <input type="hidden" name="return_to" value="/users">
           <div>
-            <label>Avatars des cartes</label>
+            <label>Avatars cartes</label>
             <input type="file" name="avatar_files" accept="image/*" multiple required>
-            <div class="small muted">Le nom du fichier doit correspondre au nom de l'enfant. Seul le visage détecté est enregistré.</div>
+            <div class="small muted">Nom du fichier = nom de l'enfant. Seul le visage détecté est enregistré.</div>
           </div>
-          <button class="btn amber children-avatar-btn" type="submit">Ajouter des avatars</button>
+          <button class="btn amber children-avatar-btn" type="submit">Ajouter avatars</button>
         </form>
       </div>
     </div>
@@ -13349,9 +9582,9 @@ def render_users(user, query, account_only=False):
       <div class="muted">Modifier et supprimer des utilisateurs.</div>
       <div class="muted small" style="margin-top:8px">Total users: {total_users}</div>
       <div class="btn-row" style="margin-top:10px">
-        <button class="btn red" type="button" id="users-bulk-delete-btn">Supprimer la sélection</button>
-        <a class="btn ghost" href="/users/export.xlsx">Exporter la liste des comptes</a>
-        {f"<a class='btn ghost' href='/deleted-users'>Archive supprimés ({deleted_user_archive_count})</a>" if user["role"] == "boss" else ""}
+        <button class="btn red" type="button" id="users-bulk-delete-btn">Supprimer sélection</button>
+        <a class="btn ghost" href="/users/export.xlsx">Exporter account list</a>
+        {"<a class='btn ghost' href='/deleted-users'>Archive supprimés</a>" if user["role"] == "boss" else ""}
       </div>
       <form id="users-bulk-delete-form" method="post" action="/users/delete" style="display:none" onsubmit="return confirm('Delete the selected users?')"></form>
       <div class="table-wrap users-records-scroll" style="margin-top:12px">
@@ -13388,7 +9621,7 @@ def render_users(user, query, account_only=False):
         invite_person_delete_button = '<button class="person-action-btn" type="button" data-delete-invite-person aria-label="Supprimer personne">⋯</button>'
     invite_panel_html = f"""
     <div class="panel" id="invite-user">
-      <h3>Inviter un utilisateur mobile</h3>
+      <h3>Inviter utilisateur mobile</h3>
       {created_invite_panel}
       <form method="post" action="/mobile-invitations/create" class="user-grid">
         <input type="hidden" name="return_to" value="/users">
@@ -13417,43 +9650,13 @@ def render_users(user, query, account_only=False):
       </div>
     </div>
     """
-    group_icon_panel_html = ""
-    if user["role"] == "boss":
-        group_icon_cards = []
-        for group_name in group_names:
-            icon_url = group_icon_url(project_id, group_name)
-            if not icon_url:
-                continue
-            group_icon_cards.append(
-                f'<div class="group-icon-card"><img src="{html.escape(icon_url, quote=True)}" alt="">'
-                f'<span>{html.escape(group_name)}</span></div>'
-            )
-        group_icon_panel_html = f"""
-    <div class="panel" id="group-icons" style="margin-top:16px">
-      <h3>Icônes GROUP</h3>
-      <div class="muted small" style="margin-bottom:8px">Le nom du fichier doit correspondre au mot distinctif du groupe. Exemple : PANDAS.PNG → POUP LES PANDAS.</div>
-      <form method="post" action="/groups/import-icons" enctype="multipart/form-data" class="btn-row" style="align-items:end">
-        <div>
-          <label>Fichiers PNG</label>
-          <input type="file" name="group_icon_files" accept=".png,image/png" multiple required>
-        </div>
-        <button class="btn primary" type="submit">Téléverser les icônes GROUP</button>
-      </form>
-      <div class="group-icon-grid">{''.join(group_icon_cards) or '<div class="muted small">Aucune icône GROUP téléversée.</div>'}</div>
-    </div>
-    """
-
-    principal_inviter_view = user["role"] == "principal" and not account_only
-    pending_page_html = "" if account_only or principal_inviter_view else pending_html
+    pending_page_html = "" if account_only else pending_html
     add_person_page_html = "" if account_only else add_person_panel_html
-    invite_page_html = "" if account_only else (created_invite_panel if principal_inviter_view else invite_panel_html)
+    invite_page_html = "" if account_only else invite_panel_html
     users_page_html = users_panel_html if account_only else ""
-    upload_page_html = "" if account_only or principal_inviter_view else upload_panel_html
-    group_icon_page_html = "" if account_only else group_icon_panel_html
-    page_scope_class = "account-page" if account_only else "inviter-page"
+    upload_page_html = "" if account_only else upload_panel_html
     body = f"""
     <style>
-      .inviter-page .btn {{ width:auto; min-width:0; justify-self:start; white-space:nowrap; }}
       .action-select {{ width:46px; min-width:46px; height:32px; padding:3px 6px; border:1px solid var(--line-strong); border-radius:6px; background:#fff; color:var(--text); font-weight:700; cursor:pointer; }}
       .action-select:focus {{ width:150px; }}
       .sortable-head a {{ color:inherit; font-weight:700; text-decoration:none; }}
@@ -13480,22 +9683,16 @@ def render_users(user, query, account_only=False):
       .account-col-action {{ width:6%; }}
       .invite-records-scroll .btn {{ min-height:0; padding:0 6px; line-height:1.1; }}
       .classes-cell {{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
-      .invite-person-action.has-delete {{ display:grid; grid-template-columns:minmax(0,1fr) 34px; gap:6px; align-items:center; }}
+      .group-field-action, .invite-person-action.has-delete {{ display:grid; grid-template-columns:minmax(0,1fr) 34px; gap:6px; align-items:center; }}
       .children-add-group input[name="class_name"] {{ min-height:40px; height:40px; line-height:1.2; }}
-      .person-action-btn {{ width:30px; height:30px; border:1px solid #d6dee9; border-radius:50%; background:#f6f9fc; color:#30465c; font-size:20px; line-height:1; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; padding:0; }}
-      .person-action-btn:hover {{ background:#eef4fb; }}
-      .group-icon-grid {{ display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }}
-      .group-icon-card {{ display:inline-flex; align-items:center; gap:6px; padding:4px 8px; border-radius:999px; background:#eef7fd; color:#225d85; font-size:12px; font-weight:750; }}
-      .group-icon-card img {{ width:28px; height:28px; border-radius:50%; object-fit:contain; }}
+      .group-action-btn, .person-action-btn {{ width:30px; height:30px; border:1px solid #d6dee9; border-radius:50%; background:#f6f9fc; color:#30465c; font-size:20px; line-height:1; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; padding:0; }}
+      .group-action-btn:hover, .person-action-btn:hover {{ background:#eef4fb; }}
     </style>
-    <div class="{page_scope_class}">
     {pending_page_html}
     {add_person_page_html}
     {invite_page_html}
     {users_page_html}
     {upload_page_html}
-    {group_icon_page_html}
-    </div>
     <script>
     (function() {{
       const checkboxes = Array.from(document.querySelectorAll('[data-user-checkbox]'));
@@ -13547,10 +9744,37 @@ def render_users(user, query, account_only=False):
             input.value = id;
             bulkDeleteForm.appendChild(input);
           }});
-          bulkDeleteForm.requestSubmit();
+          bulkDeleteForm.submit();
         }});
       }}
       syncSelectAll();
+      document.querySelectorAll('[data-delete-selected-group]').forEach(function(button) {{
+        button.addEventListener('click', function() {{
+          const wrap = button.closest('.group-field-action');
+          const input = wrap ? wrap.querySelector('input[name="class_name"]') : null;
+          const groupName = input ? input.value.trim() : '';
+          if (!groupName) {{
+            alert('Sélectionnez un groupe à supprimer.');
+            return;
+          }}
+          if (!window.confirm('Supprimer ce groupe de la liste ? ' + groupName)) return;
+          const form = document.createElement('form');
+          form.method = 'post';
+          form.action = '/children/group/delete';
+          const groupInput = document.createElement('input');
+          groupInput.type = 'hidden';
+          groupInput.name = 'group_name';
+          groupInput.value = groupName;
+          const returnInput = document.createElement('input');
+          returnInput.type = 'hidden';
+          returnInput.name = 'return_to';
+          returnInput.value = '/users';
+          form.appendChild(groupInput);
+          form.appendChild(returnInput);
+          document.body.appendChild(form);
+          form.submit();
+        }});
+      }});
       document.querySelectorAll('[data-delete-invite-person]').forEach(function(button) {{
         button.addEventListener('click', function() {{
           const select = document.getElementById('invite-target-select');
@@ -13639,14 +9863,6 @@ def render_children_admin(user, query):
         flash = (
             "info",
             "Avatars importés: {}. Ignorés: {}.".format(
-                query.get("updated", ["0"])[0],
-                query.get("skipped", ["0"])[0],
-            ),
-        )
-    if query.get("group_icons", [""])[0] == "1":
-        flash = (
-            "info",
-            "Icônes GROUP importées: {}. Ignorées: {}.".format(
                 query.get("updated", ["0"])[0],
                 query.get("skipped", ["0"])[0],
             ),
@@ -13784,14 +10000,14 @@ def render_children_admin(user, query):
         </form>
         <form method="post" action="/children/import-avatars" enctype="multipart/form-data" class="btn-row children-avatar-form" style="align-items:end">
           <div>
-            <label>Avatars des cartes</label>
+            <label>Avatars cartes</label>
             <input type="file" name="avatar_files" accept="image/*" multiple required>
-            <div class="small muted">Le nom du fichier doit correspondre au nom de l'enfant. Seul le visage détecté est enregistré.</div>
+            <div class="small muted">Nom du fichier = nom de l'enfant. Seul le visage détecté est enregistré.</div>
           </div>
-          <button class="btn amber children-avatar-btn" type="submit">Ajouter des avatars</button>
+          <button class="btn amber children-avatar-btn" type="submit">Ajouter avatars</button>
         </form>
         <div class="btn-row" style="align-items:center">
-          <button class="btn red" type="button" id="children-bulk-delete-btn">Supprimer la sélection</button>
+          <button class="btn red" type="button" id="children-bulk-delete-btn">Supprimer sélection</button>
           <a class="btn primary" href="/children/cards" target="_blank">Cartes à imprimer</a>
         </div>
       </div>
@@ -13966,7 +10182,9 @@ def render_children_admin(user, query):
             input.value = id;
             bulkDeleteForm.appendChild(input);
           }});
-          bulkDeleteForm.requestSubmit();
+          if (confirm('Delete ' + selected.length + ' selected child(ren) and attendance records?')) {{
+            bulkDeleteForm.submit();
+          }}
         }});
       }}
       const closeMenus = function() {{
@@ -14141,9 +10359,6 @@ def render_mobile_invitations(user, query):
         connection_sort = "status"
     with connect_db() as conn:
         project_id = effective_project_id(conn, user)
-        project = current_project(conn, user)
-        logo_url = project_logo_url(project)
-        auto_checkout_time = ((project["auto_checkout_time"] if project and "auto_checkout_time" in project.keys() else "") or TEACHER_DAILY_CLOSEOUT_TIME)[:5]
         location_policy = attendance_location_payload(conn, user)
         face_reset_people = conn.execute(
             """
@@ -14270,7 +10485,7 @@ def render_mobile_invitations(user, query):
           <form method="post" action="/permanent-delete/user" onsubmit="return confirm('Supprimer définitivement les comptes sélectionnés ? Cette action est irréversible.')">
             <label>Compte utilisateur</label>
             <select name="user_id" multiple size="5" required>{permanent_user_options or '<option value="">Aucun compte</option>'}</select>
-            <button class="btn red" type="submit" {"disabled" if not permanent_user_options else ""}>Supprimer définitivement le compte</button>
+            <button class="btn red" type="submit" {"disabled" if not permanent_user_options else ""}>Supprimer définitivement compte</button>
           </form>
           <form method="post" action="/permanent-delete/group" onsubmit="return confirm('Supprimer définitivement les GROUPES sélectionnés de toutes les listes ? Les enfants seront conservés sans groupe.')">
             <label>Groupe</label>
@@ -14336,7 +10551,7 @@ def render_mobile_invitations(user, query):
           .connection-sort-link:hover {{ text-decoration: underline; }}
           .connection-sort-link.sorted::after {{ content: " ^"; font-size: 10px; }}
         </style>
-        <h4 class="mobile-section-title connections">Historique des connexions</h4>
+        <h4 class="mobile-section-title connections">Historique connexions</h4>
         <div class="muted small">Le navigateur ne fournit pas la vraie adresse MAC; la colonne MAC contient l'identifiant sécurisé de l'appareil. Chaque utilisateur peut avoir plusieurs IP/appareils.</div>
         <div class="table-wrap" style="margin-top:8px;max-height:300px;overflow:auto">
           <table>
@@ -14350,26 +10565,9 @@ def render_mobile_invitations(user, query):
     <div class="panel" id="work-location" style="margin-top:16px">
       <h3 class="mobile-section-title location">Lieu de travail mobile</h3>
       <div class="muted">Les présences mobiles des éducatrices sont acceptées dans le rayon de n'importe quel lieu configuré.</div>
-      {f'<div class="alert info" style="margin-top:12px">Logo enregistré.</div>' if query.get('logo', [''])[0] == 'updated' else ''}
-      {f'<div class="alert error" style="margin-top:12px">{html.escape(query.get("logo_error", [""])[0])}</div>' if query.get('logo_error', [''])[0] else ''}
-      <div class="project-logo-settings">
-        {f'<img class="project-logo-preview" src="{html.escape(logo_url, quote=True)}" alt="Logo de la garderie">' if logo_url else '<div class="project-logo-placeholder" aria-hidden="true">LOGO</div>'}
-        <form method="post" action="/project-logo/upload" enctype="multipart/form-data" class="project-logo-form">
-          <div><label for="project-logo-file">Logo de la garderie</label><input id="project-logo-file" name="logo" type="file" accept="image/png,image/jpeg,image/webp,image/gif" required><div class="muted small">PNG, JPG, WEBP ou GIF · 5 Mo max. L'image sera recadrée pour remplir le cercle.</div></div>
-          <button class="btn primary" type="submit">Téléverser le logo</button>
-        </form>
-      </div>
-      <form method="post" action="/project-auto-checkout/update" class="auto-checkout-settings">
-        <div>
-          <label for="project-auto-checkout-time">Heure de CHECK OUT automatique</label>
-          <input id="project-auto-checkout-time" name="auto_checkout_time" type="time" value="{html.escape(auto_checkout_time)}" required>
-          <div class="muted small">Tous les enfants et employés encore présents seront automatiquement CHECK OUT à cette heure.</div>
-        </div>
-        <button class="btn primary" type="submit">Enregistrer l'heure</button>
-      </form>
       <div class="table-wrap" style="margin-top:10px">
         <table>
-          <thead><tr><th>#</th><th>Latitude</th><th>Longitude</th><th>Rayon en mètres</th><th>Mis à jour</th><th>Action</th></tr></thead>
+          <thead><tr><th>#</th><th>Latitude</th><th>Longitude</th><th>Rayon metres</th><th>Mis à jour</th><th>Action</th></tr></thead>
           <tbody>{''.join(location_rows) or '<tr><td colspan="6" class="muted">Aucun lieu configuré.</td></tr>'}</tbody>
         </table>
       </div>
@@ -14377,7 +10575,7 @@ def render_mobile_invitations(user, query):
         <input type="hidden" name="action" value="add">
         <div><label>Latitude</label><input id="mobile-location-lat" name="latitude" required></div>
         <div><label>Longitude</label><input id="mobile-location-lon" name="longitude" required></div>
-        <div><label>Rayon en mètres</label><input name="radius_meters" type="number" min="20" max="1000" value="{html.escape(str(location_policy.get('radius_meters') or 100))}"></div>
+        <div><label>Rayon metres</label><input name="radius_meters" type="number" min="20" max="1000" value="{html.escape(str(location_policy.get('radius_meters') or 100))}"></div>
         <div style="display:flex;align-items:end;gap:8px;flex-wrap:wrap">
           <button class="btn" type="submit">Ajouter</button>
           <button class="btn" type="button" id="use-browser-location">Position actuelle</button>
@@ -14395,15 +10593,6 @@ def render_mobile_invitations(user, query):
       .mobile-section-title.face {{ color: #9333ea; }}
       .mobile-section-title.connections {{ color: #b45309; }}
       .mobile-section-title.danger {{ color: #b91c1c; }}
-      .project-logo-settings {{ display:flex; align-items:center; gap:14px; margin-top:14px; padding:14px; border:1px solid #d8e2e9; border-radius:10px; background:#f8fbfc; }}
-      .project-logo-preview, .project-logo-placeholder {{ width:76px; height:76px; flex:0 0 76px; border-radius:50%; border:2px solid #fff; box-shadow:0 2px 10px rgba(16,55,82,.18); background:#e6eef3; }}
-      .project-logo-preview {{ display:block; object-fit:cover; }}
-      .project-logo-placeholder {{ display:grid; place-items:center; color:#6b7d88; font-size:12px; font-weight:800; }}
-      .project-logo-form {{ display:flex; align-items:end; gap:10px; flex:1; flex-wrap:wrap; }}
-      .project-logo-form > div {{ flex:1 1 260px; }}
-      .auto-checkout-settings {{ display:flex; align-items:end; gap:10px; flex-wrap:wrap; margin-top:14px; padding:14px; border:1px solid #d8e2e9; border-radius:10px; background:#f8fbfc; }}
-      .auto-checkout-settings > div {{ flex:1 1 260px; }}
-      .auto-checkout-settings input[type="time"] {{ max-width:180px; }}      @media (max-width:640px) {{ .project-logo-settings {{ align-items:flex-start; }} .project-logo-preview, .project-logo-placeholder {{ width:58px; height:58px; flex-basis:58px; }} .project-logo-form .btn {{ width:100%; }} }}
     </style>
     {location_panel}
     <script>
@@ -14577,28 +10766,40 @@ def render_audit(user, query):
     sort_key = query.get("sort", ["time"])[0].strip().lower()
     if sort_key not in {"time", "actor", "device", "ip", "action", "type", "object", "details"}:
         sort_key = "time"
-    actor_sort = "lower(COALESCE(NULLIF(web_users.display_name, ''), NULLIF(web_users.username, ''), ''))"
-    device_sort = "lower(CASE WHEN json_valid(audit_log.details_json) THEN COALESCE(json_extract(audit_log.details_json, '$.device_name'), '') ELSE '' END)"
-    sort_expressions = {
-        "time": "audit_log.id DESC",
-        "actor": f"({actor_sort} = '') ASC, {actor_sort} ASC, audit_log.id DESC",
-        "device": f"({device_sort} = '') ASC, {device_sort} ASC, audit_log.id DESC",
-        "ip": "(COALESCE(audit_log.ip_address, '') = '') ASC, lower(COALESCE(audit_log.ip_address, '')) ASC, audit_log.id DESC",
-        "action": "lower(COALESCE(audit_log.action, '')) ASC, audit_log.id DESC",
-        "type": "lower(COALESCE(audit_log.object_type, '')) ASC, audit_log.id DESC",
-        "object": "(COALESCE(audit_log.object_id, '') = '') ASC, lower(COALESCE(audit_log.object_id, '')) ASC, audit_log.id DESC",
-        "details": "(COALESCE(audit_log.details_json, '') = '') ASC, lower(COALESCE(audit_log.details_json, '')) ASC, audit_log.id DESC",
-    }
     with connect_db() as conn:
         rows = conn.execute(
-            f"""
+            """
             SELECT audit_log.*, COALESCE(web_users.username, '') AS actor_username, COALESCE(web_users.display_name, '') AS actor_name
             FROM audit_log
             LEFT JOIN web_users ON web_users.id = audit_log.actor_user_id
-            ORDER BY {sort_expressions[sort_key]}
-            LIMIT 200
             """
         ).fetchall()
+    def audit_sort_value(row):
+        try:
+          details = json.loads(row["details_json"] or "{}")
+        except json.JSONDecodeError:
+          details = {}
+        actor = row["actor_name"] or row["actor_username"] or ""
+        device = details.get("device_name", "") or ""
+        ip_address = row["ip_address"] or ""
+        object_id = row["object_id"] or ""
+        details_json = row["details_json"] or ""
+        if sort_key == "time":
+            return (0, -int(row["id"]))
+        if sort_key == "actor":
+            return (1 if not actor else 0, actor.lower(), -int(row["id"]))
+        if sort_key == "device":
+            return (1 if not device else 0, device.lower(), -int(row["id"]))
+        if sort_key == "ip":
+            return (1 if not ip_address else 0, ip_address.lower(), -int(row["id"]))
+        if sort_key == "action":
+            return (0, (row["action"] or "").lower(), -int(row["id"]))
+        if sort_key == "type":
+            return (0, (row["object_type"] or "").lower(), -int(row["id"]))
+        if sort_key == "object":
+            return (1 if not object_id else 0, object_id.lower(), -int(row["id"]))
+        return (1 if not details_json else 0, details_json.lower(), -int(row["id"]))
+    rows = sorted(rows, key=audit_sort_value)[:200]
     body_rows = []
     for r in rows:
         try:
@@ -14645,31 +10846,24 @@ def render_deleted_user_archive(user, query):
     if user["role"] != "boss":
         return html_page("Forbidden", user, '<div class="panel">You are not allowed to view deleted user archives.</div>')
     selected_user_id = query.get("user_id", [""])[0].strip()
-    restore_notice = ""
-    if query.get("restored", [""])[0] == "1":
-        restore_notice = '<div class="alert info">Compte restauré. L’utilisateur peut se connecter avec son mot de passe existant.</div>'
-    elif query.get("restore_error", [""])[0] == "person_linked":
-        restore_notice = '<div class="alert error">Impossible de restaurer ce compte : la personne est déjà liée à un autre compte actif.</div>'
-    elif query.get("restore_error", [""])[0]:
-        restore_notice = '<div class="alert error">Impossible de restaurer ce compte.</div>'
     with connect_db() as conn:
-        project_id = effective_project_id(conn, user)
         archive_rows = conn.execute(
             """
             SELECT *
             FROM deleted_user_archives
-            WHERE project_id = ?
             ORDER BY deleted_at DESC, id DESC
-            """,
-            (project_id,),
+            """
         ).fetchall()
         selected_archive = None
         if selected_user_id.isdigit():
             selected_archive = conn.execute(
-                "SELECT * FROM deleted_user_archives WHERE user_id = ? AND project_id = ?",
-                (int(selected_user_id), project_id),
+                "SELECT * FROM deleted_user_archives WHERE user_id = ?",
+                (int(selected_user_id),),
             ).fetchone()
-        def related_counts(target_user_id, person_id=None):
+        if not selected_archive and archive_rows:
+            selected_archive = archive_rows[0]
+
+        def related_counts(target_user_id):
             return {
                 "audit": conn.execute(
                     """
@@ -14701,14 +10895,11 @@ def render_deleted_user_archive(user, query):
                     "SELECT COUNT(*) FROM mobile_devices WHERE user_id = ?",
                     (target_user_id,),
                 ).fetchone()[0],
-                "attendance": conn.execute(
-                    "SELECT COUNT(*) FROM attendance WHERE person_id = ?",
-                    (int(person_id),),
-                ).fetchone()[0] if person_id else 0,
             }
 
         archive_rows_html = []
         for row in archive_rows:
+            counts = related_counts(row["user_id"])
             archive_rows_html.append(
                 f"""
                 <tr>
@@ -14718,29 +10909,16 @@ def render_deleted_user_archive(user, query):
                   <td>{html.escape(str(row['person_id'] or ''))}</td>
                   <td>{html.escape(row['deleted_at'])}</td>
                   <td>{html.escape(row['deleted_by_username'] or row['deleted_by_display_name'] or '')}</td>
-                  <td>
-                    <form method="post" action="/deleted-users/restore" onsubmit="return confirm('Restaurer ce compte ?');" style="display:inline">
-                      <input type="hidden" name="user_id" value="{row['user_id']}">
-                      <button class="btn" type="submit">Restaurer le compte</button>
-                    </form>
-                  </td>
+                  <td>{counts['audit']}</td>
+                  <td>{counts['files']}</td>
+                  <td>{counts['messages']}</td>
+                  <td>{counts['devices']}</td>
                 </tr>
                 """
             )
 
         related_rows_html = ""
-        archive_detail_html = ""
-        if not archive_rows:
-            archive_detail_html = """
-            <div class="panel">
-              <div class="alert info" style="margin:0">
-                Aucun compte supprimé n’est actuellement archivé pour ce projet.
-              </div>
-              <a class="btn ghost" href="/account" style="margin-top:14px">Retour aux comptes</a>
-            </div>
-            """
-        else:
-            archive_detail_html = '<div class="panel"><div class="muted">Sélectionnez un compte supprimé pour afficher son historique.</div></div>'
+        archive_detail_html = '<div class="muted">Select a deleted user to view related records.</div>'
         if selected_archive:
             target_user_id = int(selected_archive["user_id"])
             audit_rows = conn.execute(
@@ -14756,85 +10934,7 @@ def render_deleted_user_archive(user, query):
                 """,
                 (target_user_id, str(target_user_id), f'%"user_id": {target_user_id}%'),
             ).fetchall()
-            archive_counts = related_counts(target_user_id, selected_archive["person_id"])
-            attendance_rows = []
-            if selected_archive["person_id"]:
-                attendance_rows = conn.execute(
-                    """
-                    SELECT name, role, event_type, timestamp,
-                           COALESCE(operator_name, '') AS operator_name,
-                           COALESCE(source, '') AS source
-                    FROM attendance
-                    WHERE person_id = ?
-                    ORDER BY timestamp DESC, id DESC
-                    LIMIT 500
-                    """,
-                    (int(selected_archive["person_id"]),),
-                ).fetchall()
-            attendance_rows_html = "".join(
-                f"<tr><td>{html.escape(r['timestamp'])}</td><td>{html.escape(r['name'])}</td>"
-                f"<td>{html.escape(ROLE_LABELS.get(r['role'], r['role']))}</td>"
-                f"<td>{html.escape(EVENT_LABELS.get(r['event_type'], r['event_type']))}</td>"
-                f"<td>{html.escape(r['operator_name'] or '-')}</td><td>{html.escape(attendance_source_label(r['source']) if r['source'] else '-')}</td></tr>"
-                for r in attendance_rows
-            )
-            work_hours_total = 0.0
-            work_hours_rows_html = ""
-            work_hours_section_html = ""
-            if selected_archive["person_id"]:
-                archived_person = conn.execute(
-                    "SELECT * FROM persons WHERE id = ? AND role = 'teachers'",
-                    (int(selected_archive["person_id"]),),
-                ).fetchone()
-                if archived_person:
-                    teacher_events = conn.execute(
-                        """
-                        SELECT event_type, timestamp
-                        FROM attendance
-                        WHERE person_id = ? AND role = 'teachers'
-                        ORDER BY timestamp ASC, id ASC
-                        """,
-                        (int(selected_archive["person_id"]),),
-                    ).fetchall()
-                    events_by_day = {}
-                    for event in teacher_events:
-                        events_by_day.setdefault(event["timestamp"][:10], []).append(event)
-                    uses_actual_hours = int(archived_person["id"]) in actual_hours_staff_person_ids(conn, int(archived_person["project_id"] or project_id))
-                    work_hour_rows = []
-                    for day_text, day_events in sorted(events_by_day.items(), reverse=True):
-                        checkins = [event["timestamp"] for event in day_events if event["event_type"] == "checkin"]
-                        checkouts = [event["timestamp"] for event in day_events if event["event_type"] == "checkout"]
-                        schedule = teacher_schedule_for_day(
-                            conn,
-                            archived_person["name"],
-                            day_text,
-                            int(archived_person["project_id"] or project_id),
-                        )
-                        daily_hours = calculate_teacher_work_hours(
-                            day_text,
-                            checkins[0] if checkins else "",
-                            checkouts[-1] if checkouts else "",
-                            schedule["schedule_in"],
-                            use_schedule=not uses_actual_hours,
-                        )
-                        work_hours_total += float(daily_hours or 0)
-                        work_hour_rows.append(
-                            f"<tr><td>{html.escape(date_with_weekday_letter(day_text))}</td>"
-                            f"<td>{html.escape(checkins[0][11:16] if checkins else '-')}</td>"
-                            f"<td>{html.escape(checkouts[-1][11:16] if checkouts else '-')}</td>"
-                            f"<td>{html.escape(schedule['schedule_in'] or '-')}</td>"
-                            f"<td>{float(daily_hours or 0):.2f}</td></tr>"
-                        )
-                    work_hours_rows_html = "".join(work_hour_rows)
-                    work_hours_section_html = f"""
-                    <h3 style="margin-top:14px">Employee work hours</h3>
-                    <div class="table-wrap">
-                      <table>
-                        <thead><tr><th>Date</th><th>First in</th><th>Last out</th><th>Schedule in</th><th>Work hours</th></tr></thead>
-                        <tbody>{work_hours_rows_html or '<tr><td colspan="5" class="muted">No work-hour records.</td></tr>'}</tbody>
-                      </table>
-                    </div>
-                    """
+            archive_counts = related_counts(target_user_id)
             related_rows_html = "".join(
                 f"<tr><td>{html.escape(r['created_at'])}</td><td>{html.escape(r['actor_name'] or '')}</td><td>{html.escape(r['action'])}</td><td>{html.escape(r['object_type'])}</td><td>{html.escape(r['object_id'] or '')}</td><td><code>{html.escape(r['details_json'])}</code></td></tr>"
                 for r in audit_rows
@@ -14842,27 +10942,12 @@ def render_deleted_user_archive(user, query):
             archive_detail_html = f"""
             <div class="panel">
               <h3>Archive detail</h3>
-              <form method="post" action="/deleted-users/restore" onsubmit="return confirm('Restaurer ce compte ?');" style="margin-bottom:14px">
-                <input type="hidden" name="user_id" value="{target_user_id}">
-                <button class="btn" type="submit">Restaurer le compte</button>
-              </form>
               <div class="stats" style="grid-template-columns:repeat(auto-fit,minmax(160px,220px))">
                 <div class="stat"><div class="muted">Audit logs</div><div class="value">{archive_counts['audit']}</div></div>
                 <div class="stat"><div class="muted">Files</div><div class="value">{archive_counts['files']}</div></div>
                 <div class="stat"><div class="muted">Messages</div><div class="value">{archive_counts['messages']}</div></div>
                 <div class="stat"><div class="muted">Devices</div><div class="value">{archive_counts['devices']}</div></div>
-                <div class="stat"><div class="muted">Attendance</div><div class="value">{archive_counts['attendance']}</div></div>
-                {f'<div class="stat"><div class="muted">Work hours</div><div class="value">{work_hours_total:.2f}</div></div>' if work_hours_section_html else ''}
               </div>
-              <h3 style="margin-top:14px">Attendance history</h3>
-              <div class="table-wrap">
-                <table>
-                  <thead><tr><th>Timestamp</th><th>Name</th><th>Role</th><th>Event</th><th>Operator</th><th>Source</th></tr></thead>
-                  <tbody>{attendance_rows_html or '<tr><td colspan="6" class="muted">No attendance records.</td></tr>'}</tbody>
-                </table>
-              </div>
-              {work_hours_section_html}
-              <h3 style="margin-top:14px">Audit history</h3>
               <div class="table-wrap">
                 <table>
                   <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Type</th><th>Object</th><th>Details</th></tr></thead>
@@ -14885,18 +10970,14 @@ def render_deleted_user_archive(user, query):
     <div class="panel">
       <h2>Deleted users archive</h2>
       <div class="muted">Boss only. Deleted accounts stay in the archive, and their history remains available here.</div>
-      <div class="stats" style="grid-template-columns:minmax(160px,220px);margin-top:14px">
-        <div class="stat"><div class="muted">Comptes archivés</div><div class="value">{len(archive_rows)}</div></div>
-      </div>
-      {restore_notice}
     </div>
     <div class="archive-layout" style="margin-top:16px">
       <div class="panel archive-summary">
         <h3>Archived accounts</h3>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Person ID</th><th>Deleted at</th><th>Deleted by</th><th>Action</th></tr></thead>
-            <tbody>{''.join(archive_rows_html) or '<tr><td colspan="7" class="muted">Aucun compte supprimé archivé pour ce projet.</td></tr>'}</tbody>
+            <thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Person ID</th><th>Deleted at</th><th>Deleted by</th><th>Audit</th><th>Files</th><th>Messages</th><th>Devices</th></tr></thead>
+            <tbody>{''.join(archive_rows_html) or '<tr><td colspan="10" class="muted">No deleted users yet.</td></tr>'}</tbody>
           </table>
         </div>
       </div>
@@ -14906,17 +10987,6 @@ def render_deleted_user_archive(user, query):
     </div>
     """
     return html_page("Deleted users archive", user, body)
-
-
-def contact_return_url(value, state):
-    parsed = urlparse((value or "").strip())
-    path = parsed.path if not parsed.scheme and not parsed.netloc and parsed.path.startswith("/") and not parsed.path.startswith("//") else "/dashboard"
-    if path in {"/contact", "/logout"}:
-        path = "/dashboard"
-    query = parse_qs(parsed.query, keep_blank_values=True)
-    query["contact"] = [state]
-    encoded_query = urlencode(query, doseq=True)
-    return path + (f"?{encoded_query}" if encoded_query else "")
 
 
 def redirect(handler, location, extra_headers=None):
@@ -14932,30 +11002,17 @@ def redirect(handler, location, extra_headers=None):
     handler.end_headers()
 
 
-def request_body_bytes(handler, max_bytes=None):
-    cached = getattr(handler, "_cached_request_body", None)
-    if cached is not None:
-        if max_bytes is not None and len(cached) > max_bytes:
-            raise ValueError("Invalid request size")
-        return cached
-    length = int(handler.headers.get("Content-Length", "0") or 0)
-    if length < 0 or (max_bytes is not None and length > max_bytes):
-        raise ValueError("Invalid request size")
-    data = handler.rfile.read(length)
-    handler._cached_request_body = data
-    return data
-
-
 def parse_post_data(handler):
-    raw = request_body_bytes(handler).decode("utf-8")
+    length = int(handler.headers.get("Content-Length", "0") or 0)
+    raw = handler.rfile.read(length).decode("utf-8")
     return parse_qs(raw, keep_blank_values=True)
 
 
 def parse_json_post_data(handler, max_bytes=64 * 1024):
-    raw_bytes = request_body_bytes(handler, max_bytes=max_bytes)
-    if not raw_bytes:
+    length = int(handler.headers.get("Content-Length", "0") or 0)
+    if length <= 0 or length > max_bytes:
         raise ValueError("Invalid request size")
-    raw = raw_bytes.decode("utf-8")
+    raw = handler.rfile.read(length).decode("utf-8")
     data = json.loads(raw)
     if not isinstance(data, dict):
         raise ValueError("JSON body must be an object")
@@ -15212,24 +11269,8 @@ def delete_session(conn, token):
     conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
 
 
-def configured_public_url():
-    settings = load_settings()
-    return (
-        os.environ.get(PUBLIC_URL_ENV, "").strip().rstrip("/")
-        or setting_text(settings, "public_url").rstrip("/")
-        or setting_text(settings, "webapp_url").rstrip("/")
-    )
-
-
-def configured_privacy_contact():
-    settings = load_settings()
-    contact_name = os.environ.get(PRIVACY_CONTACT_ENV, "").strip() or setting_text(settings, "privacy_contact")
-    contact_email = os.environ.get(PRIVACY_EMAIL_ENV, "").strip() or setting_text(settings, "privacy_email")
-    return contact_name, contact_email
-
-
 def request_base_url(handler):
-    public_url = configured_public_url()
+    public_url = os.environ.get(PUBLIC_URL_ENV, "").strip().rstrip("/")
     if public_url:
         return public_url
     proto = handler.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip()
@@ -15245,7 +11286,7 @@ def mobile_invite_url(handler, token):
 
 
 def display_invite_url(token):
-    base = configured_public_url() or "https://pititpas.com"
+    base = os.environ.get(PUBLIC_URL_ENV, "").strip().rstrip("/") or "http://pititpas.com"
     return f"{base}/invite/accept?token={quote(token)}"
 
 
@@ -16121,7 +12162,7 @@ def health_payload():
         "email_provider": email_provider(),
         "email_configured": email_configured(),
         "smtp_configured": email_configured(),
-        "public_url_configured": bool(configured_public_url()),
+        "public_url_configured": bool(os.environ.get(PUBLIC_URL_ENV, "").strip()),
         "work_location": location,
     }
 
@@ -16203,23 +12244,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def send_file(self, path):
         try:
-            stat = path.stat()
             data = path.read_bytes()
         except OSError:
             self.send_error(404)
             return
-        etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
-        if self.headers.get("If-None-Match", "").strip() == etag:
-            self.send_response(304)
-            self.send_header("Cache-Control", "private, no-cache")
-            self.send_header("ETag", etag)
-            self.end_headers()
-            return
         mime = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
         self.send_response(200)
         self.send_header("Content-Type", mime)
-        self.send_header("Cache-Control", "private, no-cache")
-        self.send_header("ETag", etag)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -16240,10 +12271,7 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(manifest_body)
             return
-        if path == "/app-background.png":
-            self.send_file(APP_BACKGROUND_PATH)
-            return
-        if path in {"/app-icon.svg", "/favicon.ico"}:
+        if path == "/app-icon.svg":
             self.send_text(app_icon_svg(), content_type="image/svg+xml; charset=utf-8")
             return
         if path == "/sw.js":
@@ -16313,78 +12341,13 @@ class Handler(BaseHTTPRequestHandler):
             redirect(self, "/password-change")
             return
         if path == "/":
-            redirect(self, "/mobile" if user["role"] == "children" else "/overview")
+            if user["role"] == "children" or (user["role"] in STAFF_MOBILE_ATTENDANCE_ROLES and user["role"] != "boss"):
+                redirect(self, "/mobile")
+            else:
+                redirect(self, "/dashboard")
             return
         if path == "/api/messages/unread":
             json_response(self, {"ok": True, "unread": unread_message_count(user)})
-            return
-        if path == "/api/dashboard/arrival-chart":
-            if user["role"] not in {"boss", "principal"}:
-                self.send_error(403)
-                return
-            selected_date = query.get("date", [today_text()])[0]
-            try:
-                datetime.strptime(selected_date, "%Y-%m-%d")
-            except ValueError:
-                self.send_error(400)
-                return
-            with connect_db() as conn:
-                classes = classes_for_user(user, conn)
-                selected_class = query.get("class", ["all"])[0]
-                if selected_class not in classes and selected_class != "all":
-                    self.send_error(403)
-                    return
-                children = get_children(conn, user, selected_class)
-                chart_started = time.perf_counter()
-                chart_html = render_dashboard_arrival_chart(conn, children, selected_date)
-                chart_ms = (time.perf_counter() - chart_started) * 1000
-                if chart_ms >= SLOW_REQUEST_LOG_MS or os.getenv("TIMERECORD_PERF_LOG", "").strip() == "1":
-                    print(
-                        f"PERF route=/api/dashboard/arrival-chart total={chart_ms:.1f}ms "
-                        f"project={effective_project_id(conn, user)} role={user['role']} "
-                        f"class={selected_class!r} date={selected_date!r}",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-            json_response(self, {"ok": True, "html": chart_html})
-            return
-        if path == "/api/dashboard/child-recent":
-            if user["role"] != "boss":
-                self.send_error(403)
-                return
-            child_id_text = query.get("child_id", [""])[0]
-            if not child_id_text.isdigit():
-                self.send_error(400)
-                return
-            with connect_db() as conn:
-                child = conn.execute(
-                    "SELECT id FROM persons WHERE id = ? AND role = 'children' AND project_id = ?",
-                    (int(child_id_text), effective_project_id(conn, user)),
-                ).fetchone()
-                if not child:
-                    self.send_error(404)
-                    return
-                recent_rows = latest_attendance_rows(conn, child["id"], 10)
-            json_response(
-                self,
-                {
-                    "ok": True,
-                    "rows": [
-                        {
-                            "timestamp": row["timestamp"] or "",
-                            "event_type": row["event_type"] or "",
-                            "actor_name": row["actor_name"] or "System",
-                        }
-                        for row in recent_rows
-                    ],
-                },
-            )
-            return
-        if path == "/instructions":
-            if not can_view_instructions(user):
-                self.send_error(403)
-                return
-            self.send_html(render_instructions(user, query))
             return
         if path == "/projects":
             self.send_html(render_projects_admin(user, query))
@@ -16394,12 +12357,6 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(403)
                 return
             self.send_html(render_login_page_content_editor(user, query))
-            return
-        if path == "/appearance":
-            if not is_main_project_boss(user):
-                self.send_error(403)
-                return
-            self.send_html(render_appearance_settings(user, query))
             return
         if path == "/projects/diagnostics":
             self.send_html(render_project_diagnostics(user))
@@ -16417,24 +12374,11 @@ class Handler(BaseHTTPRequestHandler):
         if user["role"] == "children" and path in {"/reports", "/statistics", "/statistics/15min", "/teacher-attendance", "/export.xlsx", "/contacts", "/contacts.xlsx", "/users/export.xlsx", "/closed-dates", "/users", "/account", "/children", "/children/cards", "/mobile-invitations", "/audit", "/calendar", "/allergic-children"}:
             redirect(self, "/dashboard")
             return
-        if (
-            user["role"] in STAFF_MOBILE_ATTENDANCE_ROLES - {"boss", "principal"}
-            and path in {"/calendar", "/reports"}
-            and is_mobile_request(self)
-        ):
-            redirect(self, "/dashboard")
-            return
-        if path == "/overview":
-            if user["role"] == "children":
-                redirect(self, "/mobile")
-                return
-            self.send_html(render_presence_overview(user))
-            return
         if path == "/dashboard":
             if user["role"] == "children":
                 redirect(self, "/mobile")
                 return
-            self.send_html(render_dashboard(user, query, mobile_request=is_mobile_request(self)))
+            self.send_html(render_dashboard(user, query))
             return
         if path == "/mobile":
             self.send_html(render_mobile_dashboard(user, query))
@@ -16453,7 +12397,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(403)
                 return
             if user["role"] == "children":
-                self.send_html(render_child_agenda(user, query))
+                self.send_html(render_child_agenda(user))
             else:
                 self.send_html(render_staff_agenda(user, query))
             return
@@ -16466,22 +12410,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/contacts":
             self.send_html(render_contacts(user, query))
             return
-        if path == "/child-attendance-history":
-            if user["role"] != "boss":
-                self.send_error(403)
-                return
-            self.send_html(render_child_attendance_history(user, query))
-            return
         if path == "/contacts.xlsx":
             if user["role"] not in {"principal", "boss", "teacher", "cook"}:
                 self.send_error(403)
                 return
-            selected_class = query.get("group", ["all"])[0]
-            try:
-                payload = build_contacts_xlsx(user, selected_class)
-            except PermissionError:
-                self.send_error(403)
-                return
+            payload = build_contacts_xlsx(user)
             filename = "contacts.xlsx"
             self.send_response(200)
             self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -16524,12 +12457,14 @@ class Handler(BaseHTTPRequestHandler):
                     chosen_date = datetime.strptime(selected_date, "%Y-%m-%d").date()
                 except ValueError:
                     chosen_date = datetime.now().date()
-                with connect_db() as conn:
-                    report_project_id = effective_project_id(conn, user)
                 if selected_format == "summary":
+                    with connect_db() as conn:
+                        report_project_id = effective_project_id(conn, user)
                     payload = generate_acceo_summary_attendance_pdf(chosen_date, report_project_id)
                     filename = f"Fiche_assiduite_summary_{chosen_date.strftime('%Y%m%d')}.pdf"
                 else:
+                    with connect_db() as conn:
+                        report_project_id = effective_project_id(conn, user)
                     payload = generate_acceo_detail_attendance_pdf(chosen_date, report_project_id)
                     filename = f"Fiche_assiduite_detaillee_4_week_{chosen_date.strftime('%Y%m%d')}.pdf"
                 download_token = query.get("download_token", [""])[0]
@@ -16548,43 +12483,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_html(render_statistics_15min(user, query))
             return
         if path == "/teacher-attendance":
-            self.send_html(render_teacher_attendance(user, query, mobile_request=is_mobile_request(self)))
-            return
-        if path == "/teacher-attendance/work-hours.xlsx":
-            if user["role"] != "boss":
-                self.send_error(403)
-                return
-            start_text = query.get("start", [today_text()])[0]
-            end_text = query.get("end", [today_text()])[0]
-            try:
-                start_value = datetime.strptime(start_text, "%Y-%m-%d").date()
-                end_value = datetime.strptime(end_text, "%Y-%m-%d").date()
-            except ValueError:
-                self.send_error(400)
-                return
-            if abs((end_value - start_value).days) > 366:
-                self.send_error(400, "Date range cannot exceed 366 days")
-                return
-            payload, export_start, export_end = build_teacher_work_hours_export_xlsx(user, start_text, end_text)
-            filename = f"teacher_work_hours_{export_start.replace('-', '')}_{export_end.replace('-', '')}.xlsx"
-            self.send_response(200)
-            self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
+            self.send_html(render_teacher_attendance(user, query))
             return
         if path == "/export.xlsx":
-            if user["role"] != "boss":
+            if user["role"] not in {"principal", "boss"}:
                 self.send_error(403)
                 return
             selected_class = query.get("class", ["all"])[0]
             selected_date = query.get("date", [today_text()])[0]
-            with connect_db() as conn:
-                visible_classes = classes_for_user(user, conn)
-            if selected_class != "all" and selected_class not in visible_classes:
-                self.send_error(403)
-                return
             payload = build_attendance_export_xlsx(user, selected_class, selected_date)
             filename = f"attendance_{selected_date.replace('-', '')}.xlsx"
             self.send_response(200)
@@ -16651,36 +12557,6 @@ class Handler(BaseHTTPRequestHandler):
             data = json.dumps(payload, ensure_ascii=False)
             self.send_text(data, content_type="application/json; charset=utf-8")
             return
-        if path == "/api/teacher-attendance-trend":
-            if user["role"] != "boss":
-                self.send_error(403)
-                return
-            selected_date = query.get("date", [today_text()])[0]
-            try:
-                selected_date = datetime.strptime(selected_date, "%Y-%m-%d").strftime("%Y-%m-%d")
-            except ValueError:
-                self.send_error(400)
-                return
-            with connect_db() as conn:
-                project_id = effective_project_id(conn, user)
-                weeks = teacher_six_week_hours_summary(conn, selected_date, project_id)
-            json_response(self, {"ok": True, "html": teacher_hours_trend_chart_html(weeks)})
-            return
-        if path == "/api/teacher-attendance-recent":
-            if user["role"] != "boss":
-                self.send_error(403)
-                return
-            selected_date = query.get("date", [today_text()])[0]
-            try:
-                selected_date = datetime.strptime(selected_date, "%Y-%m-%d").strftime("%Y-%m-%d")
-            except ValueError:
-                self.send_error(400)
-                return
-            with connect_db() as conn:
-                project_id = effective_project_id(conn, user)
-                rows_html = teacher_recent_records_rows_html(conn, selected_date, project_id)
-            json_response(self, {"ok": True, "html": rows_html})
-            return
         if path == "/api/teacher-attendance-version":
             if user["role"] not in {"principal", "boss"}:
                 self.send_error(403)
@@ -16734,10 +12610,9 @@ class Handler(BaseHTTPRequestHandler):
                 json_response(self, {"ok": False, "error": str(exc)}, status=400)
                 return
             with connect_db() as conn:
-                target = login_user(conn, username, password, request_handler=self)
+                target = login_user(conn, username, password)
                 if not target:
-                    conn.commit()
-                    json_response(self, {"ok": False, "error": "Invalid username or password, or account temporarily locked"}, status=401)
+                    json_response(self, {"ok": False, "error": "Invalid username or password"}, status=401)
                     return
                 device_id = str(payload.get("device_id", "")).strip()
                 device_name = str(payload.get("device_name", "")).strip()
@@ -16754,24 +12629,10 @@ class Handler(BaseHTTPRequestHandler):
             headers = {"Set-Cookie": connection_device_cookie_header(approval["device_key"])} if approval.get("set_cookie") else None
             json_response(self, {"ok": True, "token": token, "user": mobile_user_payload(target), "status": status}, extra_headers=headers)
             return
-        if user and not verify_csrf_request(self, user) and not verify_same_origin_request(self):
-            if path.startswith("/api/"):
-                json_response(self, {"ok": False, "error": "Invalid or missing CSRF token"}, status=403)
-            else:
-                self.send_html(
-                    html_page(
-                        "Security check",
-                        user,
-                        '<div class="panel"><div class="alert error">La demande a expire ou ne provient pas de cette application. Rechargez la page et reessayez.</div></div>',
-                    ),
-                    status=403,
-                )
-            return
         if path == "/contact":
             form = parse_post_data(self)
-            return_to = form.get("return_to", ["/dashboard"])[0] if user else ""
             if form.get("website", [""])[0].strip():
-                redirect(self, contact_return_url(return_to, "sent") if user else "/?contact=sent")
+                redirect(self, "/?contact=sent")
                 return
             name = form.get("name", [""])[0].strip()
             contact_detail = form.get("contact", [""])[0].strip()
@@ -16784,26 +12645,17 @@ class Handler(BaseHTTPRequestHandler):
                 "requirements": requirements,
             }
             if not name or not contact_detail or not requirements:
-                if user:
-                    redirect(self, contact_return_url(return_to, "required"))
-                else:
-                    self.send_html(login_page(contact_error="required", contact_values=contact_values), status=400)
+                self.send_html(login_page(contact_error="required", contact_values=contact_values), status=400)
                 return
             if len(name) > 120 or len(contact_detail) > 200 or len(requirements) > 4000:
-                if user:
-                    redirect(self, contact_return_url(return_to, "too_long"))
-                else:
-                    self.send_html(login_page(contact_error="too_long", contact_values=contact_values), status=400)
+                self.send_html(login_page(contact_error="too_long", contact_values=contact_values), status=400)
                 return
             client_ip = self.client_address[0] if self.client_address else "unknown"
             submitted_at = datetime.now(timezone.utc).timestamp()
             with PUBLIC_CONTACT_LOCK:
                 last_submission = PUBLIC_CONTACT_LAST_SUBMISSION.get(client_ip, 0)
             if submitted_at - last_submission < 20:
-                if user:
-                    redirect(self, contact_return_url(return_to, "rate"))
-                else:
-                    self.send_html(login_page(contact_error="rate", contact_values=contact_values), status=429)
+                self.send_html(login_page(contact_error="rate", contact_values=contact_values), status=429)
                 return
             try:
                 with connect_db() as conn:
@@ -16837,10 +12689,7 @@ Demande / Requirements:
                     )
                     conn.commit()
             except (ValueError, sqlite3.Error):
-                if user:
-                    redirect(self, contact_return_url(return_to, "unavailable"))
-                else:
-                    self.send_html(login_page(contact_error="unavailable", contact_values=contact_values), status=503)
+                self.send_html(login_page(contact_error="unavailable", contact_values=contact_values), status=503)
                 return
             with PUBLIC_CONTACT_LOCK:
                 PUBLIC_CONTACT_LAST_SUBMISSION[client_ip] = submitted_at
@@ -16849,7 +12698,7 @@ Demande / Requirements:
                     stale_keys = [key for key, value in PUBLIC_CONTACT_LAST_SUBMISSION.items() if value < cutoff]
                     for key in stale_keys:
                         PUBLIC_CONTACT_LAST_SUBMISSION.pop(key, None)
-            redirect(self, contact_return_url(return_to, "sent") if user else "/?contact=sent")
+            redirect(self, "/?contact=sent")
             return
         if path == "/invite/accept":
             form = parse_post_data(self)
@@ -16889,10 +12738,9 @@ Demande / Requirements:
             username = form.get("username", [""])[0]
             password = form.get("password", [""])[0]
             with connect_db() as conn:
-                target = login_user(conn, username, password, request_handler=self)
+                target = login_user(conn, username, password)
                 if not target:
-                    conn.commit()
-                    self.send_html(login_page("Invalid username or password, or account temporarily locked"))
+                    self.send_html(login_page("Invalid username or password"))
                     return
                 approval = check_login_connection_approval(conn, self, target)
                 if not approval["ok"]:
@@ -16902,7 +12750,7 @@ Demande / Requirements:
                 token = create_session(conn, target["id"])
                 audit_request(self, conn, target["id"], "login", "session", object_id=target["id"], details={"username": target["username"]})
                 conn.commit()
-            default_path = "/mobile" if target["role"] == "children" else "/overview"
+            default_path = "/mobile" if target["role"] == "children" or (target["role"] in STAFF_MOBILE_ATTENDANCE_ROLES and target["role"] != "boss") else "/dashboard"
             next_path = "/password-change" if password_is_expired(target) else default_path
             cookie_headers = [session_cookie_header(token)]
             if approval.get("set_cookie"):
@@ -16940,39 +12788,6 @@ Demande / Requirements:
                     return
             redirect(self, "/projects?switched=1", {"Set-Cookie": project_context_cookie_header(project_id)})
             return
-        if path == "/instructions/save":
-            if not is_main_project_boss(user):
-                self.send_error(403)
-                return
-            form = parse_post_data(self)
-            values = {key: form.get(key, [""])[0].strip() for key in INSTRUCTION_CONTENT_DEFAULTS}
-            values = normalize_instruction_content_values(values)
-            if any(not value for value in values.values()):
-                self.send_html(render_instructions(user, values=values, error="All French and English fields are required."), status=400)
-                return
-            short_keys = [key for key in values if "_badge_" in key or "_title_" in key]
-            if any(len(values[key]) > 120 for key in short_keys) or any(len(value) > 1200 for value in values.values()):
-                self.send_html(render_instructions(user, values=values, error="Titles must be 120 characters or fewer and text must be 1200 characters or fewer."), status=400)
-                return
-            with connect_db() as conn:
-                if not is_main_project_boss(user, conn):
-                    self.send_error(403)
-                    return
-                conn.execute(
-                    """
-                    INSERT INTO instruction_content(id, content_json, updated_by_user_id, updated_at)
-                    VALUES (1, ?, ?, ?)
-                    ON CONFLICT(id) DO UPDATE SET
-                      content_json = excluded.content_json,
-                      updated_by_user_id = excluded.updated_by_user_id,
-                      updated_at = excluded.updated_at
-                    """,
-                    (json.dumps(values, ensure_ascii=False), user["id"], now_text()),
-                )
-                audit_request(self, conn, user["id"], "update_instruction_content", "instruction", object_id=1)
-                conn.commit()
-            redirect(self, "/instructions?saved=1")
-            return
         if path == "/login-page-content":
             if not is_main_project_boss(user):
                 self.send_error(403)
@@ -17003,54 +12818,6 @@ Demande / Requirements:
                 audit_request(self, conn, user["id"], "update_login_page_content", "login_page", object_id=1)
                 conn.commit()
             redirect(self, "/login-page-content?saved=1")
-            return
-        if path == "/appearance":
-            if not is_main_project_boss(user):
-                self.send_error(403)
-                return
-            form = parse_post_data(self)
-            opacity_text = form.get("opacity", [""])[0].strip()
-            text_opacity_text = form.get("text_window_opacity", [""])[0].strip()
-            try:
-                opacity = int(opacity_text)
-                text_opacity = int(text_opacity_text)
-            except ValueError:
-                self.send_html(render_appearance_settings(user, error="Both opacity values must be whole numbers from 0 to 100."), status=400)
-                return
-            if opacity < 0 or opacity > 100 or text_opacity < 0 or text_opacity > 100:
-                self.send_html(render_appearance_settings(user, error="Both opacity values must be between 0 and 100."), status=400)
-                return
-            with connect_db() as conn:
-                if not is_main_project_boss(user, conn):
-                    self.send_error(403)
-                    return
-                settings = load_settings()
-                settings[APP_BACKGROUND_OPACITY_SETTING] = opacity
-                settings[TEXT_WINDOW_OPACITY_SETTING] = text_opacity
-                save_settings(settings)
-                if app_background_opacity_percent() != opacity or text_window_opacity_percent() != text_opacity:
-                    self.send_html(render_appearance_settings(user, error="The appearance settings could not be saved."), status=500)
-                    return
-                audit_request(
-                    self,
-                    conn,
-                    user["id"],
-                    "update_app_background_opacity",
-                    "settings",
-                    object_id=APP_BACKGROUND_OPACITY_SETTING,
-                    details={"opacity": opacity},
-                )
-                audit_request(
-                    self,
-                    conn,
-                    user["id"],
-                    "update_text_window_background_opacity",
-                    "settings",
-                    object_id=TEXT_WINDOW_OPACITY_SETTING,
-                    details={"opacity": text_opacity},
-                )
-                conn.commit()
-            redirect(self, "/appearance?saved=1")
             return
         if path == "/projects/delete":
             if not user or not is_super_admin(user):
@@ -17359,83 +13126,8 @@ Demande / Requirements:
             self.send_error(401)
             return
 
-        if path == "/api/agenda/communication-read":
-            if user["role"] in {"children", "cook"}:
-                json_response(self, {"ok": False, "error": "Forbidden"}, status=403)
-                return
-            try:
-                payload = parse_json_post_data(self)
-                entry_id = int(payload.get("entry_id"))
-                if entry_id <= 0:
-                    raise ValueError("Invalid entry_id")
-            except (TypeError, ValueError, json.JSONDecodeError) as exc:
-                json_response(self, {"ok": False, "error": str(exc)}, status=400)
-                return
-            with connect_db() as conn:
-                project_id = effective_project_id(conn, user)
-                entry = conn.execute(
-                    """
-                    SELECT child_agenda_entries.*
-                    FROM child_agenda_entries
-                    JOIN web_users AS child_owner ON child_owner.id = child_agenda_entries.child_user_id
-                    JOIN persons AS child_person ON child_person.id = child_agenda_entries.child_person_id
-                    WHERE child_agenda_entries.id = ?
-                      AND child_owner.project_id = ?
-                      AND child_person.project_id = ?
-                      AND TRIM(child_agenda_entries.parent_communication) <> ''
-                    """,
-                    (entry_id, project_id, project_id),
-                ).fetchone()
-                if not entry or entry["class_name"] not in classes_for_user(user, conn):
-                    json_response(self, {"ok": False, "error": "Not found"}, status=404)
-                    return
-                allowed_person_ids = {
-                    int(child["id"]) for child in get_children(conn, user, entry["class_name"])
-                }
-                if int(entry["child_person_id"]) not in allowed_person_ids:
-                    json_response(self, {"ok": False, "error": "Not found"}, status=404)
-                    return
-                communication_version = str(
-                    entry["parent_communication_updated_at"] or entry["created_at"] or entry["id"]
-                )
-                conn.execute(
-                    """
-                    INSERT INTO agenda_communication_reads(entry_id, user_id, communication_version, read_at)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(entry_id, user_id) DO UPDATE SET
-                      communication_version = excluded.communication_version,
-                      read_at = excluded.read_at
-                    """,
-                    (entry_id, int(user["id"]), communication_version, now_text()),
-                )
-                conn.commit()
-            json_response(self, {"ok": True})
-            return
-
         content_type = self.headers.get("Content-Type", "")
         form = {} if "multipart/form-data" in content_type else parse_post_data(self)
-
-        if path == "/groups/import-icons":
-            if user["role"] != "boss":
-                self.send_error(403)
-                return
-            multipart_form, files = parse_multipart_post_data(self)
-            uploads = files.get("group_icon_files") or []
-            if not uploads:
-                self.send_html(html_page("Error", user, '<div class="panel">Veuillez choisir au moins un fichier PNG.</div>'), status=200)
-                return
-            with connect_db() as conn:
-                project_id = effective_project_id(conn, user)
-                groups = [
-                    row["class_name"] for row in conn.execute(
-                        "SELECT DISTINCT class_name FROM persons WHERE project_id = ? AND class_name <> '' ORDER BY class_name COLLATE NOCASE",
-                        (project_id,),
-                    ).fetchall()
-                ]
-                imported, skipped, _matched = import_group_icon_uploads(conn, self, user, uploads, groups)
-                conn.commit()
-            redirect(self, f"/users?group_icons=1&updated={imported}&skipped={skipped}#group-icons")
-            return
 
         if path == "/mobile-invitations/create":
             if user["role"] not in {"boss", "principal"}:
@@ -17501,44 +13193,6 @@ Demande / Requirements:
                 redirect(self, f"/users?invited=1&created_invite={quote(token_value)}#invite-user")
             else:
                 redirect(self, f"/mobile-invitations?created={quote(token_value)}&person_id={person_id}&email={email_status}")
-            return
-
-        if path == "/project-logo/upload":
-            if user["role"] != "boss":
-                self.send_error(403)
-                return
-            try:
-                multipart_form, files = parse_multipart_post_data(self)
-                uploads = files.get("logo", [])
-                if not uploads:
-                    raise ValueError("Veuillez choisir une image.")
-                with connect_db() as conn:
-                    project_id = effective_project_id(conn, user)
-                    stored_path = save_project_logo(project_id, uploads[0])
-                    conn.execute("UPDATE projects SET logo_path = ?, updated_at = ? WHERE id = ?", (stored_path, now_text(), project_id))
-                    audit_request(self, conn, user["id"], "upload_project_logo", "project", object_id=project_id, details={"filename": uploads[0].get("filename") or ""})
-                    conn.commit()
-            except (ValueError, sqlite3.Error) as exc:
-                redirect(self, f"/mobile-invitations?logo_error={quote(str(exc))}#work-location")
-                return
-            redirect(self, "/mobile-invitations?logo=updated#work-location")
-            return
-
-        if path == "/project-auto-checkout/update":
-            if user["role"] != "boss":
-                self.send_error(403)
-                return
-            time_value = form.get("auto_checkout_time", [""])[0].strip()
-            if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", time_value):
-                self.send_error(400)
-                return
-            stored_time = time_value + ":00"
-            with connect_db() as conn:
-                project_id = effective_project_id(conn, user)
-                conn.execute("UPDATE projects SET auto_checkout_time = ?, updated_at = ? WHERE id = ?", (stored_time, now_text(), project_id))
-                audit_request(self, conn, user["id"], "update_auto_checkout_time", "project", object_id=project_id, details={"auto_checkout_time": stored_time})
-                conn.commit()
-            redirect(self, "/mobile-invitations?checkout_time=updated#work-location")
             return
 
         if path == "/mobile-location/update":
@@ -17704,52 +13358,6 @@ Demande / Requirements:
             self.wfile.write(payload)
             return
 
-        if path == "/agenda/communication":
-            if user["role"] != "children":
-                self.send_error(403)
-                return
-            entry_id_text = form.get("entry_id", [""])[0].strip()
-            communication = form.get("communication", [""])[0].strip()
-            if not entry_id_text.isdigit() or len(communication) > 2000:
-                self.send_error(400)
-                return
-            entry_id = int(entry_id_text)
-            person_id = int(user["person_id"] or 0)
-            with connect_db() as conn:
-                project_id = effective_project_id(conn, user)
-                owned_entry = conn.execute(
-                    """
-                    SELECT child_agenda_entries.id
-                    FROM child_agenda_entries
-                    JOIN web_users AS child_owner ON child_owner.id = child_agenda_entries.child_user_id
-                    WHERE child_agenda_entries.id = ?
-                      AND child_owner.project_id = ?
-                      AND (
-                        child_agenda_entries.child_user_id = ?
-                        OR (? > 0 AND child_agenda_entries.child_person_id = ?)
-                      )
-                    """,
-                    (entry_id, project_id, user["id"], person_id, person_id),
-                ).fetchone()
-                if not owned_entry:
-                    self.send_error(404)
-                    return
-                updated_at = now_text()
-                conn.execute(
-                    """
-                    UPDATE child_agenda_entries
-                    SET parent_communication = ?, parent_communication_updated_at = ?
-                    WHERE id = ?
-                    """,
-                    (communication, updated_at, entry_id),
-                )
-                audit_request(
-                    self, conn, user["id"], "update_agenda_communication", "child_agenda_entry",
-                    object_id=entry_id, details={"length": len(communication)},
-                )
-                conn.commit()
-            redirect(self, f"/agenda?communication={entry_id}")
-            return
         if path == "/agenda/send":
             if user["role"] in {"children", "cook"}:
                 self.send_error(403)
@@ -17770,7 +13378,6 @@ Demande / Requirements:
                 self.send_error(400)
                 return
             with connect_db() as conn:
-                project_id = effective_project_id(conn, user)
                 classes = classes_for_user(user, conn)
                 if class_name not in classes:
                     self.send_error(403)
@@ -17778,31 +13385,16 @@ Demande / Requirements:
                 children = get_children(conn, user, class_name)
                 allowed_person_ids = {int(child["id"]) for child in children}
                 sent_count = 0
-                updated_count = 0
                 skipped_count = 0
                 for child_person_id in child_person_ids:
-                    template_payload = agenda_template_payload_from_form(form, child_person_id)
-                    body_text = str(template_payload.get("text", "") or "").strip()
-                    if not agenda_template_has_content(template_payload):
+                    body_text = form.get(f"body_person_{child_person_id}", [""])[0].strip()
+                    if not body_text:
                         skipped_count += 1
                         continue
-                    template_data_json = json.dumps(template_payload, ensure_ascii=False, separators=(",", ":"))
                     if child_person_id not in allowed_person_ids:
                         skipped_count += 1
                         continue
-                    existing_for_day = conn.execute(
-                        """
-                        SELECT child_agenda_entries.id
-                        FROM child_agenda_entries
-                        JOIN web_users ON web_users.id = child_agenda_entries.child_user_id
-                        WHERE web_users.project_id = ?
-                          AND child_agenda_entries.child_person_id = ?
-                          AND child_agenda_entries.day_text = ?
-                        LIMIT 1
-                        """,
-                        (project_id, child_person_id, day_text),
-                    ).fetchone()
-                    if not child_attended_on_day(conn, child_person_id, day_text) and not existing_for_day:
+                    if current_child_status(conn, child_person_id, day_text) != "P":
                         skipped_count += 1
                         continue
                     child_users = conn.execute(
@@ -17812,31 +13404,34 @@ Demande / Requirements:
                         JOIN persons ON persons.id = web_users.person_id
                         WHERE web_users.person_id = ? AND web_users.role = 'children' AND web_users.is_active = 1
                           AND web_users.project_id = ?
-                        ORDER BY web_users.id
                         """,
                         (child_person_id, project_id),
                     ).fetchall()
                     if not child_users:
                         skipped_count += 1
                         continue
-                    saved_at = now_text()
-                    child_user = child_users[0]
-                    was_updated = save_or_replace_child_agenda_entry(
-                        conn,
-                        int(child_user["id"]),
-                        child_person_id,
-                        class_name,
-                        day_text,
-                        title,
-                        body_text,
-                        template_data_json,
-                        user["id"],
-                        user["display_name"],
-                        saved_at,
-                    )
-                    if was_updated:
-                        updated_count += 1
-                    sent_count += 1
+                    for child_user in child_users:
+                        conn.execute(
+                            """
+                            INSERT INTO child_agenda_entries(
+                                child_user_id, child_person_id, class_name, day_text, title, body,
+                                author_user_id, author_name, created_at
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                child_user["id"],
+                                child_person_id,
+                                class_name,
+                                day_text,
+                                title,
+                                body_text,
+                                user["id"],
+                                user["display_name"],
+                                now_text(),
+                            ),
+                        )
+                        sent_count += 1
                 audit_request(
                     self,
                     conn,
@@ -17844,10 +13439,10 @@ Demande / Requirements:
                     "send_class_agenda",
                     "agenda",
                     object_id=class_name,
-                    details={"class_name": class_name, "day_text": day_text, "sent": sent_count, "updated": updated_count, "skipped": skipped_count},
+                    details={"class_name": class_name, "day_text": day_text, "sent": sent_count, "skipped": skipped_count},
                 )
                 conn.commit()
-            redirect(self, f"/agenda?class={quote(class_name)}&date={quote(day_text)}&sent={sent_count}&updated={updated_count}&skipped={skipped_count}")
+            redirect(self, f"/agenda?class={quote(class_name)}&date={quote(day_text)}&sent={sent_count}&skipped={skipped_count}")
             return
 
         if path == "/profile/update":
@@ -17866,9 +13461,8 @@ Demande / Requirements:
                     return
                 phones = split_lines(form.get("phones", [""])[0])
                 emails = split_lines(form.get("emails", [""])[0])
+                notes = form.get("notes", [""])[0].strip()
                 existing_profile = get_profile(conn, target_user_id)
-                existing_notes = existing_profile["notes"] or ""
-                notes = form.get("notes", [existing_notes])[0].strip()
                 existing_allergies = existing_profile["allergies"] if "allergies" in existing_profile.keys() else ""
                 allergies = form.get("allergies", [existing_allergies])[0].strip()
                 folder = ensure_user_folder(target)
@@ -18352,6 +13946,8 @@ Demande / Requirements:
                     self.send_error(403)
                     return
                 try:
+                    if user["role"] == "teacher" and recent_teacher_event_block(conn, child["id"], event_type):
+                        raise ValueError("Teacher attendance changes are locked for 30 minutes after the last record")
                     if day_text != today_text():
                         timestamp = f"{day_text} {local_now().strftime('%H:%M:%S')}"
                         conn.execute(
@@ -18390,7 +13986,7 @@ Demande / Requirements:
             if return_to == "mobile":
                 redirect(self, f"/mobile?class={quote(child['class_name'] or 'all')}&date={quote(day_text)}&child_id={child['id']}")
             else:
-                redirect(self, f"/dashboard?class={quote(child['class_name'] or 'all')}&date={quote(day_text)}")
+                redirect(self, f"/dashboard?class={quote(child['class_name'] or 'all')}&date={quote(day_text)}&child_id={child['id']}")
             return
 
         if path.startswith("/child/") and path.endswith("/delete-day"):
@@ -18409,7 +14005,7 @@ Demande / Requirements:
                     return
                 delete_today_attendance(conn, user, child["id"], day_text, request_handler=self)
                 conn.commit()
-            redirect(self, f"/dashboard?class={quote(child['class_name'] or 'all')}&date={quote(day_text)}")
+            redirect(self, f"/dashboard?class={quote(child['class_name'] or 'all')}&date={quote(day_text)}&child_id={child['id']}")
             return
 
         if path == "/me/event":
@@ -18589,94 +14185,6 @@ Demande / Requirements:
                     )
                 conn.commit()
             redirect(self, "/account?deleted=1")
-            return
-
-        if path == "/deleted-users/restore":
-            if user["role"] != "boss":
-                self.send_error(403)
-                return
-            target_id = form.get("user_id", [""])[0].strip()
-            if not target_id.isdigit():
-                self.send_error(400)
-                return
-            target_user_id = int(target_id)
-            with connect_db() as conn:
-                project_id = effective_project_id(conn, user)
-                archived = conn.execute(
-                    "SELECT * FROM deleted_user_archives WHERE user_id = ? AND project_id = ?",
-                    (target_user_id, project_id),
-                ).fetchone()
-                target = conn.execute(
-                    "SELECT * FROM web_users WHERE id = ? AND project_id = ?",
-                    (target_user_id, project_id),
-                ).fetchone()
-                if not archived or not target or int(target["is_active"] or 0) == 1:
-                    redirect(self, "/deleted-users?restore_error=not_found")
-                    return
-                person_id = archived["person_id"]
-                person_recreated = False
-                if person_id:
-                    person = conn.execute(
-                        "SELECT id FROM persons WHERE id = ? AND project_id = ?",
-                        (int(person_id), project_id),
-                    ).fetchone()
-                    if not person:
-                        try:
-                            archive_snapshot = json.loads(archived["snapshot_json"] or "{}")
-                        except (TypeError, ValueError, json.JSONDecodeError):
-                            archive_snapshot = {}
-                        linked_person_snapshot = archive_snapshot.get("linked_person") or {}
-                        archived_classes = safe_json_list(archived["allowed_classes_json"])
-                        restored_class_name = (linked_person_snapshot.get("class_name") or "").strip()
-                        if not restored_class_name and archived["role"] == "children" and archived_classes:
-                            restored_class_name = str(archived_classes[0]).strip()
-                        try:
-                            person_id = create_or_reuse_person_for_user_role(
-                                conn,
-                                archived["role"],
-                                linked_person_snapshot.get("name") or archived["display_name"],
-                                class_name=restored_class_name,
-                                photo_path=linked_person_snapshot.get("photo_path") or "",
-                                project_id=project_id,
-                            )
-                        except ValueError:
-                            redirect(self, f"/deleted-users?user_id={target_user_id}&restore_error=person_linked")
-                            return
-                        person_recreated = bool(person_id)
-                    linked = None
-                    if person_id:
-                        linked = conn.execute(
-                            "SELECT id FROM web_users WHERE person_id = ? AND is_active = 1 AND id <> ? AND project_id = ?",
-                            (int(person_id), target_user_id, project_id),
-                        ).fetchone()
-                    if linked:
-                        redirect(self, f"/deleted-users?user_id={target_user_id}&restore_error=person_linked")
-                        return
-                conn.execute(
-                    "UPDATE web_users SET is_active = 1, person_id = ?, updated_at = ? WHERE id = ? AND project_id = ?",
-                    (person_id, now_text(), target_user_id, project_id),
-                )
-                conn.execute(
-                    "DELETE FROM deleted_user_archives WHERE user_id = ? AND project_id = ?",
-                    (target_user_id, project_id),
-                )
-                audit_request(
-                    self,
-                    conn,
-                    user["id"],
-                    "restore_user",
-                    "user",
-                    object_id=target_user_id,
-                    details={
-                        "username": archived["username"],
-                        "display_name": archived["display_name"],
-                        "role": archived["role"],
-                        "person_id": person_id,
-                        "person_recreated": person_recreated,
-                    },
-                )
-                conn.commit()
-            redirect(self, "/deleted-users?restored=1")
             return
 
         if path == "/permanent-delete/user":
@@ -19364,7 +14872,8 @@ def parse_multipart_post_data(handler):
     if "multipart/form-data" not in content_type or "boundary=" not in content_type:
         return parse_post_data(handler), {}
     boundary = content_type.split("boundary=", 1)[1].strip().strip('"')
-    data = request_body_bytes(handler)
+    length = int(handler.headers.get("Content-Length", "0") or 0)
+    data = handler.rfile.read(length)
     delimiter = ("--" + boundary).encode("utf-8")
     form = {}
     files = {}
@@ -19728,7 +15237,7 @@ def child_calendar_panel_html(target, events, calendar_month=None):
         <input type="hidden" name="calendar_month" value="{html.escape(selected_month)}">
         <div class="toolbar" style="margin-bottom:0">
           <div>
-            <label>Utilisation des dates sélectionnées</label>
+            <label>Usage des dates sélectionnées</label>
             <select name="event_type">{event_options}</select>
           </div>
         </div>
@@ -19888,7 +15397,7 @@ def render_child_home(user, query):
     recipient_checks = recipient_email_options(recipients)
     photo_resize_controls = mail_photo_resize_controls_html()
     inbox_rows = "".join(f"<tr><td>{html.escape(m['created_at'])}</td><td>{html.escape(m['sender_name'] or m['sender_username'] or '')}</td><td>{html.escape(m['subject'])}</td><td>{html.escape(m['body'])}</td></tr>" for m in inbox)
-    sent_rows = "".join(f"<tr><td>{html.escape(m['created_at'])}</td><td data-no-translate>{html.escape(m['recipient_name'] or m['recipient_username'] or '')}</td><td data-no-translate>{html.escape(m['subject'])}</td><td data-no-translate>{html.escape(m['body'])}</td></tr>" for m in sent)
+    sent_rows = "".join(f"<tr><td>{html.escape(m['created_at'])}</td><td>{html.escape(m['recipient_name'] or m['recipient_username'] or '')}</td><td>{html.escape(m['subject'])}</td><td>{html.escape(m['body'])}</td></tr>" for m in sent)
     saved_html = "" if user["role"] == "children" else ('<div class="alert info">Profile saved.</div>' if query.get("saved", ["0"])[0] == "1" else "")
     sent_html = '<div class="alert info">MESSAGE sent.</div>' if query.get("sent", ["0"])[0] == "1" else ""
     body = f"""
@@ -19901,7 +15410,7 @@ def render_child_home(user, query):
           <input type="hidden" name="target_user_id" value="{target['id']}">
           <div><label>Phones</label><textarea name="phones" rows="2" style="resize:vertical;color:#000" placeholder="One phone per line">{html.escape(phones)}</textarea></div>
           <div><label>E-MAIL</label><textarea name="emails" rows="2" style="resize:vertical;color:#000" placeholder="One E-MAIL per line">{html.escape(emails)}</textarea></div>
-          <div><label>ALLERGIES ALIMENTAIRES</label><textarea name="allergies" rows="2" style="resize:vertical;color:#000" placeholder="Allergies, restrictions alimentaires, consignes importantes">{html.escape(allergies)}</textarea></div>
+          <div><label>Alimentaire ALLERGIES</label><textarea name="allergies" rows="2" style="resize:vertical;color:#000" placeholder="Allergies, restrictions alimentaires, consignes importantes">{html.escape(allergies)}</textarea></div>
           <div><label>Notes</label><textarea name="notes" rows="2" style="resize:vertical;color:#000">{html.escape(profile['notes'] or '')}</textarea></div>
           <div><button class="btn primary" type="submit">Enregistrer le profil</button></div>
         </form>
@@ -19972,13 +15481,9 @@ def render_profile(user, query):
     allergies = profile["allergies"] if "allergies" in profile.keys() else ""
     allergies_html = ""
     calendar_html = ""
-    contact_rows = 2
-    notes_html = f'<div><label>Notes</label><textarea name="notes" rows="2" style="resize:vertical;color:#000">{html.escape(profile["notes"] or "")}</textarea></div>'
     if target["role"] == "children":
-        allergies_html = f'<div class="profile-allergies-section"><label>ALLERGIES ALIMENTAIRES</label><textarea name="allergies" rows="1" style="resize:vertical;color:#000" placeholder="Allergies, restrictions alimentaires, consignes importantes">{html.escape(allergies)}</textarea></div>'
+        allergies_html = f'<div><label>Alimentaire ALLERGIES</label><textarea name="allergies" rows="2" style="resize:vertical;color:#000" placeholder="Allergies, restrictions alimentaires, consignes importantes">{html.escape(allergies)}</textarea></div>'
         calendar_html = child_calendar_panel_html(target, calendar_events, calendar_month)
-        contact_rows = 1
-        notes_html = ""
     chooser = ""
     if len(users) > 1:
         options = "".join(
@@ -20010,7 +15515,7 @@ def render_profile(user, query):
           <input type="file" name="avatar_file" accept=".jpg,.jpeg,image/jpeg" required>
           <div class="small muted">Nom requis: {html.escape(expected_filename)}</div>
         </div>
-        <div style="display:flex;align-items:end"><button class="btn primary" type="submit">Ajouter un avatar</button></div>
+        <div style="display:flex;align-items:end"><button class="btn primary" type="submit">Ajouter avatar</button></div>
       </form>
       """
     body = f"""
@@ -20022,11 +15527,11 @@ def render_profile(user, query):
       {child_avatar_html}
       <form method="post" action="/profile/update" class="grid profile-form" style="gap:12px;margin-top:12px">
         <input type="hidden" name="target_user_id" value="{target['id']}">
-        <div class="profile-contact-section profile-phone-section"><label>PHONE</label><textarea class="profile-contact-field" name="phones" rows="{contact_rows}" style="resize:vertical;color:#000" placeholder="One phone per line">{html.escape(phones)}</textarea></div>
-        <div class="profile-contact-section profile-email-section"><label>E-MAIL</label><textarea class="profile-contact-field" name="emails" rows="{contact_rows}" style="resize:vertical;color:#000" placeholder="One E-MAIL per line">{html.escape(emails)}</textarea></div>
+        <div><label>Phones</label><textarea name="phones" rows="2" style="resize:vertical;color:#000" placeholder="One phone per line">{html.escape(phones)}</textarea></div>
+        <div><label>E-MAIL</label><textarea name="emails" rows="2" style="resize:vertical;color:#000" placeholder="One E-MAIL per line">{html.escape(emails)}</textarea></div>
         {allergies_html}
-        {notes_html}
-        <div class="profile-submit-row"><button class="btn primary" type="submit">Enregistrer le profil</button></div>
+        <div><label>Notes</label><textarea name="notes" rows="2" style="resize:vertical;color:#000">{html.escape(profile['notes'] or '')}</textarea></div>
+        <div><button class="btn primary" type="submit">Enregistrer le profil</button></div>
       </form>
     </div>
     {calendar_html}
@@ -20034,28 +15539,10 @@ def render_profile(user, query):
       .child-avatar-upload {{ display:grid; grid-template-columns:72px minmax(0,1fr) auto; gap:10px; align-items:end; margin-top:10px; }}
       .child-avatar-fields input {{ width:100%; }}
       @media (max-width: 720px) {{
-        body.child-mobile-nav .panel h2 {{ margin-bottom:2px; line-height:1.05; }}
-        body.child-mobile-nav .child-avatar-upload {{ grid-template-columns:56px minmax(0,1fr); gap:3px 5px; margin-top:2px; padding:4px 6px; border-radius:7px 7px 0 0; background:#e8f4ff; }}
+        .child-avatar-upload {{ grid-template-columns:56px minmax(0,1fr); }}
         .child-avatar-preview img, .child-avatar-preview .muted-box {{ width:56px !important; height:56px !important; }}
-        body.child-mobile-nav .child-avatar-upload label,
-        body.child-mobile-nav .child-avatar-upload .small {{ margin:0; line-height:1.05; }}
-        body.child-mobile-nav .child-avatar-fields input {{ min-height:34px; padding:3px 0; line-height:1.05; background:transparent; border:0; box-shadow:none; }}
-        body.child-mobile-nav .child-avatar-upload > div:last-child {{ grid-column:1 / -1; justify-content:flex-end; }}
-        body.child-mobile-nav .child-avatar-upload .btn {{ width:max-content; min-width:0; padding-left:12px; padding-right:12px; }}
-        body.child-mobile-nav .profile-form {{ gap:0 !important; margin-top:0 !important; }}
-        body.child-mobile-nav .profile-form label {{ margin:0; line-height:1.05; }}
-        body.child-mobile-nav .profile-contact-section {{ padding:4px 6px; border-radius:0; background:#e7f7ec; }}
-        body.child-mobile-nav .profile-phone-section {{ padding-bottom:0; }}
-        body.child-mobile-nav .profile-email-section {{ padding-top:0; }}
-        body.child-mobile-nav .profile-contact-field {{ min-height:34px; height:34px; padding:3px 0; line-height:1.05; background:transparent; border:0; box-shadow:none; }}
-        body.child-mobile-nav .profile-allergies-section {{ padding:4px 6px; border-radius:0 0 7px 7px; background:#fde9eb; }}
-        body.child-mobile-nav .profile-allergies-section textarea {{ min-height:34px; height:34px; padding:3px 0; line-height:1.05; background:transparent; border:0; box-shadow:none; }}
-        body.child-mobile-nav .profile-submit-row {{ display:flex; justify-content:flex-end; margin-top:3px; }}
-        body.child-mobile-nav .profile-submit-row .btn {{ width:max-content; min-width:0; padding-left:12px; padding-right:12px; }}
-        body.child-mobile-nav .child-avatar-upload .btn,
-        body.child-mobile-nav .profile-submit-row .btn {{ background:#cfe8f8; border-color:#b9d9ee; color:#225d85; }}
-        body.child-mobile-nav .child-avatar-upload .btn:hover,
-        body.child-mobile-nav .profile-submit-row .btn:hover {{ background:#bddff4; border-color:#a7cfe9; color:#194f75; }}
+        .child-avatar-upload > div:last-child {{ grid-column:1 / -1; }}
+        .child-avatar-upload .btn {{ width:100%; }}
       }}
     </style>
     """
@@ -20081,18 +15568,22 @@ def render_files(user, query):
     for item in files:
         token = file_path_token(item["stored_path"])
         url = "/media/" + token
-
+        is_image = item["stored_path"].lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".gif"))
+        thumb = f'<img src="{url}" alt="{html.escape(item["original_name"])}" style="max-width:100%;max-height:70px;border-radius:6px;border:1px solid var(--line)">' if url and is_image else '<div class="muted-box">File</div>'
+        uploaded_by = html.escape(item["uploader_name"] or item["uploader_username"] or ("Folder" if item.get("is_existing_only") else "Unknown"))
         delete_file_id = html.escape(str(item.get("file_id") or ""))
         delete_token = html.escape(token)
         cards.append(f"""
-        <div class="file-card file-name-only">
+        <div class="file-card">
+          {thumb}
           <div class="file-title">{html.escape(item['original_name'])}</div>
+          <div class="small muted">Uploaded by {uploaded_by} at {html.escape(item['uploaded_at'])}</div>
+          <div class="small">{html.escape(item['note'] or '')}</div>
           <div class="file-actions">
             <details class="file-action-menu">
               <summary aria-label="Actions">...</summary>
               <div class="file-action-panel">
                 <a class="btn" href="{url}" target="_blank" rel="noopener">Ouvrir</a>
-                <a class="btn" href="{url}" download="{html.escape(item['original_name'], quote=True)}">Enregistrer sous</a>
                 <form method="post" action="/files/delete" onsubmit="return confirm('Delete this file?')" style="display:inline">
                   <input type="hidden" name="target_user_id" value="{target['id']}">
                   <input type="hidden" name="file_id" value="{delete_file_id}">
@@ -20110,11 +15601,12 @@ def render_files(user, query):
     <div class="panel">
       <h2>Files</h2>
       {chooser}
-      <style>
-        .file-grid {{ grid-template-columns:1fr; gap:4px; }}
-        .file-card.file-name-only {{ min-height:42px; padding:10px 52px 10px 10px; display:flex; align-items:center; }}
-        .file-card.file-name-only .file-title {{ margin:0; overflow-wrap:anywhere; }}
-      </style>
+      <form method="post" action="/files/upload" enctype="multipart/form-data" class="grid" style="gap:10px;margin-bottom:14px">
+        <input type="hidden" name="target_user_id" value="{target['id']}">
+        <div><label>Photo or file</label><input type="file" name="photo" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" multiple></div>
+        <div><label>Note</label><input name="note" placeholder="Visible tag for this upload"></div>
+        <div><button class="btn primary" type="submit">Téléverser</button></div>
+      </form>
       <div class="file-grid">{''.join(cards) or '<div class="muted">No files uploaded.</div>'}</div>
     </div>
     """
@@ -20181,7 +15673,7 @@ def recipient_email_options(recipients):
             f'data-value="{html.escape(str(recipient["id"]))}" data-label="{html.escape(label)}" '
             f'data-role="{html.escape(role_label.lower())}" data-name="{html.escape(display_name.lower())}">'
             f'<span>{html.escape(role_label)}</span>'
-            f'<span data-no-translate>{html.escape(display_name)}</span>'
+            f'<span>{html.escape(display_name)}</span>'
             '</button>'
         )
     return "".join(rows)
@@ -20192,23 +15684,20 @@ def mail_recipient_picker_html(recipient_options, group_hint="", allow_multi_sel
     multi_flag = "1" if allow_multi_select else "0"
     return f"""
         <div class="mail-recipient-layout" data-recipient-picker data-multi-select="{multi_flag}">
-          <div class="mail-recipient-anchor">
-            <button type="button" class="mail-send-to-trigger" data-recipient-open>SEND TO</button>
-            <div class="mail-send-to" data-send-to role="button" tabindex="0" aria-expanded="false">
+          <div>
+            <label>SEND TO</label>
+            <div class="mail-send-to" data-send-to>
               <div class="mail-send-to-empty">No MESSAGE recipient selected.</div>
             </div>
             <div data-selected-inputs></div>
-            <div class="mail-recipient-popover" data-recipient-popover hidden>
-              <div class="mail-recipient-popover-head">
-                <strong>MESSAGE RECIPIENT</strong>
-                <button type="button" class="mail-recipient-popover-close" data-recipient-close aria-label="Close">&times;</button>
-              </div>
-              <div class="mail-target-list" data-target-recipient>
-                <div class="mail-target-head"><button type="button" data-sort-recipient="role">Rôle</button><button type="button" data-sort-recipient="name">Name</button></div>
-                {rows}
-              </div>
-              {group_hint}
+          </div>
+          <div>
+            <label>MESSAGE recipient</label>
+            <div class="mail-target-list" data-target-recipient>
+              <div class="mail-target-head"><button type="button" data-sort-recipient="role">Rôle</button><button type="button" data-sort-recipient="name">Name</button></div>
+              {rows}
             </div>
+            {group_hint}
           </div>
         </div>
       <script>
@@ -20218,18 +15707,11 @@ def mail_recipient_picker_html(recipient_options, group_hint="", allow_multi_sel
             picker.dataset.ready = '1';
             var targetList = picker.querySelector('[data-target-recipient]');
             var sendTo = picker.querySelector('[data-send-to]');
-            var openButton = picker.querySelector('[data-recipient-open]');
-            var closeButton = picker.querySelector('[data-recipient-close]');
-            var popover = picker.querySelector('[data-recipient-popover]');
             var inputs = picker.querySelector('[data-selected-inputs]');
             var form = picker.closest('form');
             var selected = new Map();
             var lastClickedRow = null;
             var allowMultiSelect = picker.dataset.multiSelect === '1';
-            function setPopoverOpen(isOpen) {{
-              popover.hidden = !isOpen;
-              sendTo.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-            }}
             function targetRows() {{
               return Array.prototype.slice.call(targetList.querySelectorAll('.mail-target-row'));
             }}
@@ -20254,16 +15736,13 @@ def mail_recipient_picker_html(recipient_options, group_hint="", allow_multi_sel
               targetList.dataset.sortDir = nextDir;
               lastClickedRow = null;
             }}
-            function currentUiText(fr, en) {{
-              return window.PititPasLanguage && window.PititPasLanguage.get() === 'en' ? en : fr;
-            }}
             function render() {{
               sendTo.innerHTML = '';
               inputs.innerHTML = '';
               if (!selected.size) {{
                 var empty = document.createElement('div');
                 empty.className = 'mail-send-to-empty';
-                empty.textContent = currentUiText('Aucun destinataire sélectionné.', 'No MESSAGE recipient selected.');
+                empty.textContent = 'No MESSAGE recipient selected.';
                 sendTo.appendChild(empty);
                 return;
               }}
@@ -20272,7 +15751,7 @@ def mail_recipient_picker_html(recipient_options, group_hint="", allow_multi_sel
                 button.type = 'button';
                 button.className = 'mail-recipient-pill';
                 button.textContent = label;
-                button.title = currentUiText('Cliquez pour retirer', 'Click to remove');
+                button.title = 'Click to remove';
                 button.addEventListener('click', function() {{
                   selected.delete(value);
                   render();
@@ -20322,27 +15801,6 @@ def mail_recipient_picker_html(recipient_options, group_hint="", allow_multi_sel
                 addRow(row);
               }}
               lastClickedRow = row;
-              if (!allowMultiSelect) setPopoverOpen(false);
-            }});
-            openButton.addEventListener('click', function() {{
-              setPopoverOpen(popover.hidden);
-            }});
-            sendTo.addEventListener('click', function(event) {{
-              if (event.target.closest('.mail-recipient-pill')) return;
-              setPopoverOpen(true);
-            }});
-            sendTo.addEventListener('keydown', function(event) {{
-              if (event.key === 'Enter' || event.key === ' ') {{
-                event.preventDefault();
-                setPopoverOpen(true);
-              }}
-            }});
-            closeButton.addEventListener('click', function() {{ setPopoverOpen(false); }});
-            document.addEventListener('click', function(event) {{
-              if (!picker.contains(event.target)) setPopoverOpen(false);
-            }});
-            document.addEventListener('keydown', function(event) {{
-              if (event.key === 'Escape') setPopoverOpen(false);
             }});
             targetList.addEventListener('dragstart', function(event) {{
               var row = event.target.closest('.mail-target-row');
@@ -20395,28 +15853,15 @@ def render_mail(user, query, error=None):
             ORDER BY created_at DESC, id DESC
             LIMIT 30
             """, (user["id"],)).fetchall()
+        folder_attachment_picker = mail_folder_attachment_picker_html(user_file_items(conn, user))
         conn.execute(
             "UPDATE internal_messages SET read_at = ? WHERE recipient_user_id = ? AND read_at IS NULL",
             (now_text(), user["id"]),
         )
     recipient_checks = recipient_email_options(recipients)
     photo_resize_controls = mail_photo_resize_controls_html()
-    inbox_rows = "".join(
-        f"""
-        <details class="mail-inbox-entry">
-          <summary>
-            <span>{html.escape(m['created_at'])}</span>
-            <span>{html.escape(m['sender_name'] or m['sender_username'] or '')}</span>
-          </summary>
-          <div class="mail-inbox-entry-content">
-            <div><strong>Subject</strong><div data-no-translate>{html.escape(m['subject']) or '-'}</div></div>
-            <div><strong>MESSAGE</strong><div class="mail-inbox-body" data-no-translate>{html.escape(m['body']) or '-'}</div></div>
-          </div>
-        </details>
-        """
-        for m in inbox
-    )
-    sent_rows = "".join(f"<tr><td>{html.escape(m['created_at'])}</td><td data-no-translate>{html.escape(m['recipient_name'] or m['recipient_username'] or '')}</td><td data-no-translate>{html.escape(m['subject'])}</td><td data-no-translate>{html.escape(m['body'])}</td></tr>" for m in sent)
+    inbox_rows = "".join(f"<tr><td>{html.escape(m['created_at'])}</td><td>{html.escape(m['sender_name'] or m['sender_username'] or '')}</td><td>{html.escape(m['subject'])}</td><td>{html.escape(m['body'])}</td></tr>" for m in inbox)
+    sent_rows = "".join(f"<tr><td>{html.escape(m['created_at'])}</td><td>{html.escape(m['recipient_name'] or m['recipient_username'] or '')}</td><td>{html.escape(m['subject'])}</td><td>{html.escape(m['body'])}</td></tr>" for m in sent)
     group_hint = '<div class="small muted">.</div>' if user["role"] == "principal" else ""
     sent_html = '<div class="alert info">MESSAGE sent.</div>' if query.get("sent", ["0"])[0] == "1" else ""
     body = f"""
@@ -20427,30 +15872,16 @@ def render_mail(user, query, error=None):
       <form method="post" action="/mail/send" enctype="multipart/form-data" class="grid" style="gap:10px">
         {mail_recipient_picker_html(recipient_checks, group_hint, can_mail_multi_select(user))}
         <div><label>Subject</label><input name="subject"></div>
-        <div><label>Message</label><textarea name="body" rows="3"></textarea></div>
+        <div><label>Message</label><textarea name="body" rows="5"></textarea></div>
         <div><label>Attachments from this device</label><input type="file" name="attachments" multiple></div>
         {photo_resize_controls}
+        {folder_attachment_picker}
         <div><button class="btn primary" type="submit">Envoyer</button></div>
       </form>
     </div>
-    <div class="grid two-col mail-page-history" style="margin-top:16px">
-      <div class="panel mail-inbox-panel">
-        <h3>MESSAGES REÇUS</h3>
-        <style>
-          .mail-inbox-list {{ display:grid; gap:3px; }}
-          .mail-inbox-entry {{ border:0; border-radius:0; background:transparent; }}
-          .mail-inbox-entry summary {{ display:grid; grid-template-columns:minmax(128px,auto) minmax(0,1fr) 20px; gap:10px; align-items:center; padding:7px 2px; cursor:pointer; list-style:none; font-weight:750; line-height:1.2; }}
-          .mail-inbox-entry summary::-webkit-details-marker {{ display:none; }}
-          .mail-inbox-entry summary::after {{ content:"＋"; grid-column:3; color:var(--blue); font-size:17px; }}
-          .mail-inbox-entry[open] summary::after {{ content:"−"; }}
-          .mail-inbox-entry-content {{ display:grid; gap:8px; padding:8px 2px 10px; border-top:1px solid var(--line); }}
-          .mail-inbox-entry-content strong {{ display:block; margin-bottom:3px; font-size:12px; color:var(--muted); }}
-          .mail-inbox-body {{ white-space:pre-wrap; overflow-wrap:anywhere; }}
-          @media (max-width:520px) {{ .mail-inbox-entry summary {{ grid-template-columns:minmax(112px,auto) minmax(0,1fr) 18px; gap:7px; font-size:12px; }} }}
-        </style>
-        <div class="mail-inbox-list">{inbox_rows or '<div class="muted">No MESSAGE.</div>'}</div>
-      </div>
-      <div class="panel mail-page-sent-history"><h3>MESSAGES ENVOYÉS</h3><div class="table-wrap"><table><thead><tr><th>Time</th><th>To</th><th>Subject</th><th>MESSAGE</th></tr></thead><tbody>{sent_rows or '<tr><td colspan="4" class="muted">No MESSAGE sent.</td></tr>'}</tbody></table></div></div>
+    <div class="grid two-col child-mobile-mail-history" style="margin-top:16px">
+      <div class="panel"><h3>MESSAGES REÇUS</h3><div class="table-wrap"><table><thead><tr><th>Time</th><th>From</th><th>Subject</th><th>MESSAGE</th></tr></thead><tbody>{inbox_rows or '<tr><td colspan="4" class="muted">No MESSAGE.</td></tr>'}</tbody></table></div></div>
+      <div class="panel"><h3>MESSAGES ENVOYÉS</h3><div class="table-wrap"><table><thead><tr><th>Time</th><th>To</th><th>Subject</th><th>MESSAGE</th></tr></thead><tbody>{sent_rows or '<tr><td colspan="4" class="muted">No MESSAGE sent.</td></tr>'}</tbody></table></div></div>
     </div>
     """
     return html_page("MESSAGE", user, body)
@@ -20525,3 +15956,18 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

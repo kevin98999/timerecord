@@ -1,12 +1,17 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from PyInstaller.utils.hooks import collect_submodules
+
+
+pymupdf_hiddenimports = collect_submodules('fitz') + collect_submodules('pymupdf')
+
 
 a = Analysis(
     ['app.py'],
     pathex=[],
     binaries=[],
     datas=[],
-    hiddenimports=[],
+    hiddenimports=pymupdf_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

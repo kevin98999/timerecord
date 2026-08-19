@@ -45,3 +45,173 @@
 - `v20260626-019` - 2026-06-26 10:30:08 - compact gray fiche calendar styling - 532 files - `.app_versions/v20260626-019.zip`
 - `v20260626-020` - 2026-06-26 10:38:29 - auto refresh fiche preview on date change - 533 files - `.app_versions/v20260626-020.zip`
 - `v20260626-021` - 2026-06-26 10:44:53 - half width fiche calendar preview - 533 files - `.app_versions/v20260626-021.zip`
+- `v20260626-022` - 2026-06-26 19:06:49 - manual backup after sticky top nav and files mail updates - 541 files - `.app_versions/v20260626-022.zip`
+- `v20260627-001` - 2026-06-27 13:29:09 - after: desktop web bidirectional sync working - 538 files - `.app_versions/v20260627-001.zip`
+- `v20260628-001` - 2026-06-28 12:32:50 - after: sync network presence summary and attendance time fixes - 547 files - `.app_versions/v20260628-001.zip`
+- `v20260707-001` - 2026-07-07 09:33:09 - after: restore old menu and fix teacher child list visibility - 710 files - `.app_versions/v20260707-001.zip`
+- `v20260707-002` - 2026-07-07 09:54:00 - after: restore new menu and keep teacher child list visibility fix - 710 files - `.app_versions/v20260707-002.zip`
+- `v20260707-003` - 2026-07-07 12:30:49 - after: fix staff person role check constraint - 707 files - `.app_versions/v20260707-003.zip`
+- `v20260707-004` - 2026-07-07 13:39:06 - after: auto-save teacher attendance times and filter deleted staff - 707 files - `.app_versions/v20260707-004.zip`
+- `v20260707-005` - 2026-07-07 14:40:09 - after: compact mobile invite and account lists - 707 files - `.app_versions/v20260707-005.zip`
+- `v20260707-006` - 2026-07-07 14:55:38 - after: show linked child class in account list - 707 files - `.app_versions/v20260707-006.zip`
+- `v20260707-007` - 2026-07-07 15:07:56 - before: bulk generate accounts for persons without users - 707 files - `.app_versions/v20260707-007.zip`
+- `v20260707-008` - 2026-07-07 19:23:01 - after: show staff records in list for deletion - 710 files - `.app_versions/v20260707-008.zip`
+- `v20260707-009` - 2026-07-07 23:54:29 - after: teacher attendance permissions and mobile work location entry - 711 files - `.app_versions/v20260707-009.zip`
+- `v20260708-001` - 2026-07-08 21:29:47 - backup: current version after staff mobile attendance and teacher status fixes - 712 files - `.app_versions/v20260708-001.zip`
+- `v20260709-002` - 2026-07-09 14:53:31 - backup: current version after mobile work location connection history styling - 713 files - `.app_versions/v20260709-002.zip`
+- `v20260709-003` - 2026-07-09 17:41:44 - backup: current version after staff mobile calendar layout and 28-day list - 713 files - `.app_versions/v20260709-003.zip`
+- `v20260709-004` - 2026-07-09 21:52:33 - backup: current version after account inviter and group list fixes - 713 files - `.app_versions/v20260709-004.zip`
+- `v20260712-001` - 2026-07-12 22:29:32 - current: after fixing Agenda window - 731 files - `.app_versions/v20260712-001.zip`
+- `v20260713-001` - 2026-07-13 09:11:19 - before: hide timestamp attendance history from principal Tableau Enfants - 731 files - `.app_versions/v20260713-001.zip`
+- `v20260713-002` - 2026-07-13 10:03:32 - before: add global back button beside hamburger menu - 731 files - `.app_versions/v20260713-002.zip`
+- `v20260713-003` - 2026-07-13 10:57:46 - current: global back button beside hamburger and principal Tableau cleanup - 731 files - `.app_versions/v20260713-003.zip`
+- `v20260713-005` - 2026-07-13 11:51:17 - before: fix desktop create-space guidance hidden by invited login state - 1997 files - `.app_versions/v20260713-005.zip`
+- `v20260713-006` - 2026-07-13 11:57:36 - before: move desktop create-space guidance below Se connecter - 1997 files - `.app_versions/v20260713-006.zip`
+- `v20260713-007` - 2026-07-13 12:01:54 - before: change desktop Creer un espace link to blue - 1997 files - `.app_versions/v20260713-007.zip`
+- `v20260713-010` - 2026-07-13 12:25:16 - before: make French the default login language while preserving last selection - 3113 files - `.app_versions/v20260713-010.zip`
+- `v20260713-011` - 2026-07-13 12:34:50 - before: reduce French and English login hero heading size - 3113 files - `.app_versions/v20260713-011.zip`
+- `v20260713-012` - 2026-07-13 12:43:21 - before: remove French and English login hero headline - 3113 files - `.app_versions/v20260713-012.zip`
+- `v20260713-013` - 2026-07-13 12:54:45 - before: add four bilingual homepage benefit summaries - 3113 files - `.app_versions/v20260713-013.zip`
+- `v20260713-014` - 2026-07-13 13:05:07 - before: add teacher timecard and automatic pay hours homepage summary - 3113 files - `.app_versions/v20260713-014.zip`
+- `v20260713-015` - 2026-07-13 13:26:23 - before: redesign project creation success state from MODIFY.png - 3115 files - `.app_versions/v20260713-015.zip`
+- `v20260713-016` - 2026-07-13 13:44:06 - before: add zero-child owner initialization floating guide - 3115 files - `.app_versions/v20260713-016.zip`
+- `v20260713-017` - 2026-07-13 13:52:30 - before: make owner initialization guide bilingual - 3115 files - `.app_versions/v20260713-017.zip`
+- `v20260713-018` - 2026-07-13 13:59:07 - before: add bilingual invitation guidance popup after user creation - 3115 files - `.app_versions/v20260713-018.zip`
+- `v20260713-019` - 2026-07-13 14:20:56 - before: add bilingual homepage contact form and pricing - 3115 files - `.app_versions/v20260713-019.zip`
+- `v20260713-020` - 2026-07-13 15:07:19 - before: require password confirmation for every password update - 3115 files - `.app_versions/v20260713-020.zip`
+- `v20260713-021` - 2026-07-13 15:14:25 - checkpoint: homepage contact pricing onboarding invitation guidance and password confirmation - 3115 files - `.app_versions/v20260713-021.zip`
+- `v20260713-022` - 2026-07-13 15:16:06 - before: restore child password reset in Account edit window - 3115 files - `.app_versions/v20260713-022.zip`
+- `v20260713-023` - 2026-07-13 17:17:02 - before: split Account table into new left-nav Account page - 3115 files - `.app_versions/v20260713-023.zip`
+- `v20260713-024` - 2026-07-13 17:26:00 - before: rename left navigation Account and Inviter labels - 3115 files - `.app_versions/v20260713-024.zip`
+- `v20260713-025` - 2026-07-13 17:34:40 - before: show 10 Account rows and compact table columns - 3115 files - `.app_versions/v20260713-025.zip`
+- `v20260713-026` - 2026-07-13 19:09:17 - before: add main-project owner login-page text editor - 3116 files - `.app_versions/v20260713-026.zip`
+- `v20260713-027` - 2026-07-13 19:33:02 - before: add editable login price and free-trial period - 3116 files - `.app_versions/v20260713-027.zip`
+- `v20260713-028` - 2026-07-13 19:40:38 - before: allow all main-project boss accounts to edit login page content - 3116 files - `.app_versions/v20260713-028.zip`
+- `v20260713-029` - 2026-07-13 22:37:07 - backup: login-page text editor available to all main-project bosses, including editable price and trial period - 3117 files - `.app_versions/v20260713-029.zip`
+- `v20260713-030` - 2026-07-13 22:40:48 - before: add automated release-readiness acceptance checks - 3117 files - `.app_versions/v20260713-030.zip`
+- `v20260713-031` - 2026-07-13 23:07:24 - before: add public privacy policy and production deployment templates - 3118 files - `.app_versions/v20260713-031.zip`
+- `v20260714-006` - 2026-07-14 10:35:10 - 登录页调整：品牌、统计数字、价格位置、Contact样式及隐藏忘记密码 - 3127 files - `.app_versions/v20260714-006.zip`
+- `v20260715-001` - 2026-07-15 22:04:12 - Présences des éducatrices 日期范围持久化，远程部署前备份 - 3228 files - `.app_versions/v20260715-001.zip`
+- `v20260717-001` - 2026-07-17 18:38:34 - Before rebuilding 4-week fiche PDF from template - 3051 files - `.app_versions/v20260717-001.zip`
+- `v20260718-001` - 2026-07-18 10:08:54 - before adding boss restore for deleted teachers and children - 3210 files - `.app_versions/v20260718-001.zip`
+- `v20260718-002` - 2026-07-18 16:36:40 - Before adding deleted account restore button - 3210 files - `.app_versions/v20260718-002.zip`
+- `v20260719-001` - 2026-07-19 22:13:36 - before: child mobile Tableau Arrivee Depart round buttons - 3210 files - `.app_versions/v20260719-001.zip`
+- `v20260719-002` - 2026-07-19 22:29:13 - before: center child card above round attendance buttons - 3210 files - `.app_versions/v20260719-002.zip`
+- `v20260719-003` - 2026-07-19 22:47:50 - before: raise mobile face match threshold from 0.25 - 3210 files - `.app_versions/v20260719-003.zip`
+- `v20260719-004` - 2026-07-19 23:03:59 - before: oval teacher mobile face attendance buttons - 3210 files - `.app_versions/v20260719-004.zip`
+- `v20260720-001` - 2026-07-20 01:02:32 - before: interactive daily Agenda template from agenda2.jpg - 3212 files - `.app_versions/v20260720-001.zip`
+- `v20260720-002` - 2026-07-20 06:35:55 - before: strict agenda2 image-overlay electronic form - 3213 files - `.app_versions/v20260720-002.zip`
+- `v20260720-003` - 2026-07-20 08:47:44 - before: compact two-column Agenda layout with sieste image - 3223 files - `.app_versions/v20260720-003.zip`
+- `v20260720-004` - 2026-07-20 10:05:12 - before: whiten backgrounds of 10 Agenda icon assets - 3223 files - `.app_versions/v20260720-004.zip`
+- `v20260720-005` - 2026-07-20 10:58:16 - before: apply MODIFY.png Agenda annotations - 3223 files - `.app_versions/v20260720-005.zip`
+- `v20260720-006` - 2026-07-20 11:23:21 - before: lighten green bedding in Agenda sieste icon - 3223 files - `.app_versions/v20260720-006.zip`
+- `v20260720-007` - 2026-07-20 12:16:09 - before: add MODIFY.png Diner Repas text area to Agenda - 3228 files - `.app_versions/v20260720-007.zip`
+- `v20260720-008` - 2026-07-20 12:39:08 - before: move two MODIFY.png Sieste controls left and repair report encoding - 3219 files - `.app_versions/v20260720-008.zip`
+- `v20260720-009` - 2026-07-20 12:52:27 - before: add three-line parent Communication feedback to daily Agenda - 3219 files - `.app_versions/v20260720-009.zip`
+- `v20260720-010` - 2026-07-20 14:06:18 - before: deduplicate daily child Agenda Communication - 3219 files - `.app_versions/v20260720-010.zip`
+- `v20260720-011` - 2026-07-20 14:22:41 - before: show only one Communication in child Agenda window - 3219 files - `.app_versions/v20260720-011.zip`
+- `v20260720-012` - 2026-07-20 16:11:01 - before: relax staff mobile face threshold from 0.50 to 0.40 - 3219 files - `.app_versions/v20260720-012.zip`
+- `v20260720-013` - 2026-07-20 16:27:11 - before: add child-parent APP user manual with screenshots - 3232 files - `.app_versions/v20260720-013.zip`
+- `v20260721-007` - 2026-07-21 12:15:46 - before: lower restored staff face threshold from 0.40 to 0.30 - 4033 files - `.app_versions/v20260721-007.zip`
+- `v20260721-008` - 2026-07-21 12:51:29 - before: fix SQLite lock contention causing production 502 - 4035 files - `.app_versions/v20260721-008.zip`
+- `v20260721-009` - 2026-07-21 13:35:07 - before: add attendance indexes for slow dashboard - 4035 files - `.app_versions/v20260721-009.zip`
+- `v20260721-010` - 2026-07-21 13:49:11 - before: restore safe global bilingual UI and verify face threshold 0.30 - 4035 files - `.app_versions/v20260721-010.zip`
+- `v20260721-011` - 2026-07-21 23:09:05 - 修复已删除孩子账户仍显示在TABLEAU前备份 - 4051 files - `.app_versions/v20260721-011.zip`
+- `v20260721-012` - 2026-07-21 23:39:17 - 部署前备份：已删除孩子账户不再显示于TABLEAU，并已安装测试与安全相关skills - 4049 files - `.app_versions/v20260721-012.zip`
+- `v20260722-001` - 2026-07-22 00:26:55 - 新增非孩子登录总览页前备份 - 4063 files - `.app_versions/v20260722-001.zip`
+- `v20260722-002` - 2026-07-22 00:54:12 - 将总览页我的签到改为法英双语前备份 - 4076 files - `.app_versions/v20260722-002.zip`
+- `v20260722-003` - 2026-07-22 01:05:14 - 调整总览页圆圈大小和右侧对齐前备份 - 4076 files - `.app_versions/v20260722-003.zip`
+- `v20260722-004` - 2026-07-22 01:22:10 - 收紧总览页文字与圆圈间距前备份 - 4082 files - `.app_versions/v20260722-004.zip`
+- `v20260722-005` - 2026-07-22 08:02:35 - before global 120-second idle logout - 4094 files - `.app_versions/v20260722-005.zip`
+- `v20260723-001` - 2026-07-23 06:22:04 - Before preventing principals from editing their own IN OUT times - 4097 files - `.app_versions/v20260723-001.zip`
+- `v20260723-002` - 2026-07-23 06:30:31 - Before changing principal self IN OUT controls back to selectable with backend rejection - 4095 files - `.app_versions/v20260723-002.zip`
+- `v20260724-001` - 2026-07-24 06:34:27 - Before optimizing teacher attendance date and work-hours loading - 4096 files - `.app_versions/v20260724-001.zip`
+- `v20260724-002` - 2026-07-24 07:03:00 - Current version after teacher work-hours performance optimization - 4096 files - `.app_versions/v20260724-002.zip`
+- `v20260724-003` - 2026-07-24 07:08:59 - Before compact popup time pickers in second teacher attendance list - 4096 files - `.app_versions/v20260724-003.zip`
+- `v20260724-004` - 2026-07-24 07:24:53 - Before popup schedule time pickers in employee face attendance window - 4104 files - `.app_versions/v20260724-004.zip`
+- `v20260724-005` - 2026-07-24 07:34:36 - Before restricting child dashboard charts to boss and principal - 4110 files - `.app_versions/v20260724-005.zip`
+- `v20260726-001` - 2026-07-26 19:43:03 - Before adding parent-reply red dot to employee Agenda child names - 4112 files - `.app_versions/v20260726-001.zip`
+- `v20260726-002` - 2026-07-26 19:55:12 - Before adding per-employee Agenda reply read state - 4112 files - `.app_versions/v20260726-002.zip`
+- `v20260726-003` - 2026-07-26 20:34:30 - Before adjusting MESSAGE Send To and body default rows - 4112 files - `.app_versions/v20260726-003.zip`
+- `v20260726-004` - 2026-07-26 21:03:50 - Before hiding project name and Aujourd'hui on staff mobile home - 4112 files - `.app_versions/v20260726-004.zip`
+- `v20260726-005` - 2026-07-26 21:58:05 - Before limiting Calendar and 4-week reports on non-management staff mobile - 4112 files - `.app_versions/v20260726-005.zip`
+- `v20260727-001` - 2026-07-27 16:02:27 - Before collapsing child Agenda entries by default - 4113 files - `.app_versions/v20260727-001.zip`
+- `v20260727-002` - 2026-07-27 16:13:45 - Before compacting child Agenda list and removing entry frames - 4113 files - `.app_versions/v20260727-002.zip`
+- `v20260727-003` - 2026-07-27 16:40:48 - Before simplifying Files page to filename-only list - 4113 files - `.app_versions/v20260727-003.zip`
+- `v20260727-004` - 2026-07-27 17:16:48 - Before restoring received message details on mobile MESSAGE page - 4113 files - `.app_versions/v20260727-004.zip`
+- `v20260727-005` - 2026-07-27 17:29:38 - Before collapsing received messages to time and sender summaries - 4113 files - `.app_versions/v20260727-005.zip`
+- `v20260727-006` - 2026-07-27 17:39:00 - Before removing folder attachments from MESSAGE window - 4113 files - `.app_versions/v20260727-006.zip`
+- `v20260727-007` - 2026-07-27 17:48:55 - Before adding Save As action to Files list - 4113 files - `.app_versions/v20260727-007.zip`
+- `v20260730-001` - 2026-07-30 08:14:04 - 优化老板TABLEAU ENFANTS与PRESENCES EDUCATRICES性能前备份 - 4136 files - `.app_versions/v20260730-001.zip`
+- `v20260730-002` - 2026-07-30 08:29:49 - 第二轮优化老板桌面页面性能前备份 - 4136 files - `.app_versions/v20260730-002.zip`
+- `v20260730-003` - 2026-07-30 08:53:16 - 全站所有角色页面补齐法英双语前备份 - 4136 files - `.app_versions/v20260730-003.zip`
+- `v20260730-004` - 2026-07-30 19:34:03 - manual snapshot - 4143 files - `.app_versions/v20260730-004.zip`
+- `v20260730-005` - 2026-07-30 19:44:53 - manual snapshot - 4143 files - `.app_versions/v20260730-005.zip`
+- `v20260731-001` - 2026-07-31 14:03:42 - manual snapshot - 4143 files - `.app_versions/v20260731-001.zip`
+- `v20260731-002` - 2026-07-31 16:01:58 - manual snapshot - 4153 files - `.app_versions/v20260731-002.zip`
+- `v20260731-003` - 2026-07-31 16:22:19 - manual snapshot - 4156 files - `.app_versions/v20260731-003.zip`
+- `v20260731-004` - 2026-07-31 18:10:02 - manual snapshot - 4158 files - `.app_versions/v20260731-004.zip`
+- `v20260731-005` - 2026-07-31 18:51:05 - manual snapshot - 4158 files - `.app_versions/v20260731-005.zip`
+- `v20260731-006` - 2026-07-31 19:50:59 - manual snapshot - 4159 files - `.app_versions/v20260731-006.zip`
+- `v20260803-001` - 2026-08-03 15:12:32 - manual snapshot - 4161 files - `.app_versions/v20260803-001.zip`
+- `v20260803-002` - 2026-08-03 15:33:18 - manual snapshot - 4161 files - `.app_versions/v20260803-002.zip`
+- `v20260803-003` - 2026-08-03 16:08:41 - manual snapshot - 4161 files - `.app_versions/v20260803-003.zip`
+- `v20260803-004` - 2026-08-03 16:18:14 - manual snapshot - 4161 files - `.app_versions/v20260803-004.zip`
+- `v20260803-005` - 2026-08-03 16:30:43 - manual snapshot - 4161 files - `.app_versions/v20260803-005.zip`
+- `v20260803-006` - 2026-08-03 16:50:14 - manual snapshot - 4161 files - `.app_versions/v20260803-006.zip`
+- `v20260803-007` - 2026-08-03 16:56:18 - manual snapshot - 4161 files - `.app_versions/v20260803-007.zip`
+- `v20260803-008` - 2026-08-03 17:04:38 - manual snapshot - 4161 files - `.app_versions/v20260803-008.zip`
+- `v20260803-009` - 2026-08-03 17:15:39 - manual snapshot - 4161 files - `.app_versions/v20260803-009.zip`
+- `v20260803-010` - 2026-08-03 17:36:15 - manual snapshot - 4161 files - `.app_versions/v20260803-010.zip`
+- `v20260803-011` - 2026-08-03 21:50:37 - manual snapshot - 4161 files - `.app_versions/v20260803-011.zip`
+- `v20260803-012` - 2026-08-03 21:57:50 - manual snapshot - 4161 files - `.app_versions/v20260803-012.zip`
+- `v20260803-013` - 2026-08-03 22:10:07 - manual snapshot - 4161 files - `.app_versions/v20260803-013.zip`
+- `v20260803-014` - 2026-08-03 22:16:40 - manual snapshot - 4161 files - `.app_versions/v20260803-014.zip`
+- `v20260803-015` - 2026-08-03 22:21:15 - manual snapshot - 4161 files - `.app_versions/v20260803-015.zip`
+- `v20260803-016` - 2026-08-03 22:28:37 - manual snapshot - 4161 files - `.app_versions/v20260803-016.zip`
+- `v20260803-017` - 2026-08-03 22:42:55 - manual snapshot - 4161 files - `.app_versions/v20260803-017.zip`
+- `v20260803-018` - 2026-08-03 22:50:55 - manual snapshot - 4161 files - `.app_versions/v20260803-018.zip`
+- `v20260803-019` - 2026-08-03 22:55:43 - manual snapshot - 4161 files - `.app_versions/v20260803-019.zip`
+- `v20260803-020` - 2026-08-03 23:01:34 - manual snapshot - 4161 files - `.app_versions/v20260803-020.zip`
+- `v20260803-021` - 2026-08-03 23:06:42 - manual snapshot - 4161 files - `.app_versions/v20260803-021.zip`
+- `v20260803-022` - 2026-08-03 23:16:25 - manual snapshot - 4161 files - `.app_versions/v20260803-022.zip`
+- `v20260803-023` - 2026-08-03 23:22:25 - manual snapshot - 4161 files - `.app_versions/v20260803-023.zip`
+- `v20260803-024` - 2026-08-03 23:33:41 - manual snapshot - 4161 files - `.app_versions/v20260803-024.zip`
+- `v20260803-025` - 2026-08-03 23:38:16 - manual snapshot - 4161 files - `.app_versions/v20260803-025.zip`
+- `v20260803-026` - 2026-08-03 23:46:15 - manual snapshot - 4161 files - `.app_versions/v20260803-026.zip`
+- `v20260804-001` - 2026-08-04 10:12:44 - Dashboard性能第一阶段：计时与趋势图异步加载前 - 4161 files - `.app_versions/v20260804-001.zip`
+- `v20260804-002` - 2026-08-04 16:49:29 - 园长TABLEAU ENFANTS隐藏EXPORTER EXCEL前 - 4164 files - `.app_versions/v20260804-002.zip`
+- `v20260804-003` - 2026-08-04 16:59:16 - 修复老板TABLEAU ENFANTS Excel导出筛选和项目隔离前 - 4164 files - `.app_versions/v20260804-003.zip`
+- `v20260804-004` - 2026-08-04 17:13:06 - 老板手机端PRESENCES EDUCATRICES隐藏曲线图前 - 4165 files - `.app_versions/v20260804-004.zip`
+- `v20260804-005` - 2026-08-04 17:23:04 - 手机端员工最近记录折叠按钮前 - 4166 files - `.app_versions/v20260804-005.zip`
+- `v20260804-006` - 2026-08-04 17:31:55 - 手机端员工最近记录点击后按需更新前 - 4166 files - `.app_versions/v20260804-006.zip`
+- `v20260804-007` - 2026-08-04 17:54:55 - 桌面员工工时列表导出和全宽布局前 - 4166 files - `.app_versions/v20260804-007.zip`
+- `v20260804-008` - 2026-08-04 18:28:53 - W-T和S-T统计卡片文字溢出修复前 - 4167 files - `.app_versions/v20260804-008.zip`
+- `v20260805-001` - 2026-08-05 07:04:13 - 所有用户右侧菜单Instructions和Assistance文案前 - 4167 files - `.app_versions/v20260805-001.zip`
+- `v20260805-002` - 2026-08-05 07:12:18 - 左侧菜单Enfants Allergiques Educatrices和收窄宽度前 - 4167 files - `.app_versions/v20260805-002.zip`
+- `v20260805-003` - 2026-08-05 07:17:41 - Contacts页面增加GROUPE筛选前 - 4167 files - `.app_versions/v20260805-003.zip`
+- `v20260805-004` - 2026-08-05 09:31:15 - manual snapshot - 4168 files - `.app_versions/v20260805-004.zip`
+- `v20260805-005` - 2026-08-05 09:43:38 - manual snapshot - 4168 files - `.app_versions/v20260805-005.zip`
+- `v20260805-006` - 2026-08-05 09:50:43 - manual snapshot - 4168 files - `.app_versions/v20260805-006.zip`
+- `v20260807-001` - 2026-08-07 00:27:53 - manual snapshot - 4174 files - `.app_versions/v20260807-001.zip`
+- `v20260807-002` - 2026-08-07 08:10:02 - manual snapshot - 4174 files - `.app_versions/v20260807-002.zip`
+- `v20260807-003` - 2026-08-07 08:38:10 - manual snapshot - 4176 files - `.app_versions/v20260807-003.zip`
+- `v20260807-004` - 2026-08-07 09:43:18 - manual snapshot - 4176 files - `.app_versions/v20260807-004.zip`
+- `v20260807-005` - 2026-08-07 10:03:06 - manual snapshot - 4176 files - `.app_versions/v20260807-005.zip`
+- `v20260807-006` - 2026-08-07 10:24:38 - manual snapshot - 4176 files - `.app_versions/v20260807-006.zip`
+- `v20260807-007` - 2026-08-07 11:36:16 - manual snapshot - 4176 files - `.app_versions/v20260807-007.zip`
+- `v20260807-008` - 2026-08-07 11:46:43 - manual snapshot - 4177 files - `.app_versions/v20260807-008.zip`
+- `v20260807-009` - 2026-08-07 12:00:42 - manual snapshot - 4177 files - `.app_versions/v20260807-009.zip`
+- `v20260807-010` - 2026-08-07 12:11:16 - manual snapshot - 4178 files - `.app_versions/v20260807-010.zip`
+- `v20260807-011` - 2026-08-07 12:21:55 - manual snapshot - 4178 files - `.app_versions/v20260807-011.zip`
+- `v20260807-012` - 2026-08-07 12:56:24 - manual snapshot - 4179 files - `.app_versions/v20260807-012.zip`
+- `v20260807-013` - 2026-08-07 15:15:03 - manual snapshot - 4179 files - `.app_versions/v20260807-013.zip`
+- `v20260807-014` - 2026-08-07 15:30:16 - manual snapshot - 4179 files - `.app_versions/v20260807-014.zip`
+- `v20260808-001` - 2026-08-08 07:24:57 - manual snapshot - 4180 files - `.app_versions/v20260808-001.zip`
+- `v20260817-001` - 2026-08-17 09:05:16 - 老板 EDUCِATRICES 第二列表每日强制签出自动导出前备份 - 4178 files - `.app_versions/v20260817-001.zip`
+- `v20260818-001` - 2026-08-18 20:48:01 - 非老板 ENFANTS 隐藏班级出勤汇总前 - 4186 files - `.app_versions/v20260818-001.zip`
+- `v20260818-002` - 2026-08-18 21:21:37 - ENFANTS 统计忽略 TEST GROUP 前 - 4186 files - `.app_versions/v20260818-002.zip`
+- `v20260818-003` - 2026-08-18 21:29:22 - ACCUEIL 孩子统计排除 TEST GROUP 前 - 4186 files - `.app_versions/v20260818-003.zip`
+- `v20260818-004` - 2026-08-18 21:52:16 - 全站背景与主项目老板透明度设置前 - 4187 files - `.app_versions/v20260818-004.zip`
+- `v20260818-005` - 2026-08-18 22:14:03 - 背景上浮到文字下方前 - 4187 files - `.app_versions/v20260818-005.zip`
+- `v20260819-001` - 2026-08-19 04:37:59 - 主项目老板可调文字窗口底色透明度前 - 4186 files - `.app_versions/v20260819-001.zip`

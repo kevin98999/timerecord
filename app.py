@@ -9,8 +9,11 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 import zipfile
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tkinter import BOTH, END, LEFT, RIGHT, TOP, Button, Entry, Frame, Label, LabelFrame, Listbox, Radiobutton, StringVar, Tk, Toplevel, messagebox
 from tkinter import filedialog, ttk
@@ -43,12 +46,17 @@ WEBAPP_HOST = "0.0.0.0"
 WEBAPP_PORT = 8000
 WEBAPP_PROCESS = None
 WEBAPP_LOG_HANDLES = []
+WEBAPP_URL_SETTING = "webapp_url"
+WEBAPP_URL_ENV = "TIMERECORD_WEBAPP_URL"
+DESKTOP_SYNC_TOKEN_SETTING = "desktop_sync_token"
+DESKTOP_SYNC_TOKEN_ENV = "TIMERECORD_DESKTOP_SYNC_TOKEN"
 FACE_SIZE = (128, 128)
 MATCH_THRESHOLD = 55.0
 FACE_DETECT_SCALE_FACTOR = 1.08
 FACE_DETECT_MIN_NEIGHBORS = 3
 FACE_DETECT_MIN_SIZE = (45, 45)
 AUTO_SCAN_INTERVAL_SECONDS = 1.0
+REMOTE_ATTENDANCE_PULL_INTERVAL_MS = 10000
 AUTO_RECORD_COOLDOWN_SECONDS = 20.0
 CHILD_RECORD_COOLDOWN_SECONDS = 20 * 60
 TEACHER_RECORD_COOLDOWN_SECONDS = 30 * 60
@@ -97,6 +105,9 @@ def local_ipv4_addresses():
 
 
 def webapp_access_urls():
+    remote_url = configured_webapp_url()
+    if remote_url:
+        return [remote_url]
     hosts = ["127.0.0.1"] + local_ipv4_addresses()
     return [f"http://{host}:{WEBAPP_PORT}" for host in hosts]
 
@@ -104,6 +115,21 @@ EVENT_LABELS = {
     "checkin": "Check In",
     "checkout": "Check Out",
 }
+OPERATION_LABELS = {
+    "self": "Self",
+    "system": "System",
+}
+
+
+def attendance_source_label(source):
+    return OPERATION_LABELS["self"] if source == "desktop" else OPERATION_LABELS["system"]
+
+
+def attendance_operator_name(name, source, operator_name=""):
+    operator_name = (operator_name or "").strip()
+    if operator_name:
+        return operator_name
+    return name if source == "desktop" else OPERATION_LABELS["system"]
 
 ATTENDANCE_PROMPT_VOICE = "Voice greeting"
 ATTENDANCE_PROMPT_BELL = "System bell only"
@@ -114,6 +140,16 @@ CLASS_NAMES = ("1ç­", "2ç­", "3ç­", "4ç­")
 
 def now_text():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def normalize_remote_attendance_timestamp(value):
+    event_time = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    now_local = datetime.now()
+    if event_time > now_local + timedelta(minutes=5):
+        local_from_utc = event_time.replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
+        if local_from_utc <= now_local + timedelta(minutes=5):
+            return local_from_utc.strftime("%Y-%m-%d %H:%M:%S")
+    return event_time.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def ensure_dirs():
@@ -140,7 +176,120 @@ def save_settings(settings):
     ensure_dirs()
     try:
         with SETTINGS_PATH.open("w", encoding="utf-8") as file:
-            json.dump(settings, file, indent=2)
+            json.dump(settings, file, indent=2, ensure_ascii=False)
+    except OSError:
+        pass
+
+
+def normalize_webapp_url(value):
+    if not isinstance(value, str):
+        return ""
+    value = value.strip()
+    if not value:
+        return ""
+    if not re.match(r"^https?://", value, re.IGNORECASE):
+        value = "https://" + value
+    return value.rstrip("/")
+
+
+def configured_webapp_url():
+    env_value = normalize_webapp_url(os.environ.get(WEBAPP_URL_ENV))
+    if env_value:
+        return env_value
+    return normalize_webapp_url(load_settings().get(WEBAPP_URL_SETTING))
+
+
+def configured_desktop_sync_token():
+    env_value = os.environ.get(DESKTOP_SYNC_TOKEN_ENV, "").strip()
+    if env_value:
+        return env_value
+    value = load_settings().get(DESKTOP_SYNC_TOKEN_SETTING, "")
+    return value.strip() if isinstance(value, str) else ""
+
+
+def check_remote_webapp(url, timeout=5):
+    if not url:
+        return False, "missing URL"
+    request = urllib.request.Request(url, headers={"User-Agent": "TimeRecordDesktop/1.0"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            status = getattr(response, "status", 0)
+            if 200 <= status < 500:
+                return True, f"HTTP {status}"
+            return False, f"HTTP {status}"
+    except urllib.error.HTTPError as exc:
+        if 200 <= exc.code < 500:
+            return True, f"HTTP {exc.code}"
+        return False, f"HTTP {exc.code}"
+    except (OSError, urllib.error.URLError) as exc:
+        return False, str(exc)
+
+
+def post_remote_attendance(payload, timeout=8):
+    remote_url = configured_webapp_url()
+    token = configured_desktop_sync_token()
+    if not remote_url or not token:
+        return False, "remote sync is not configured"
+    endpoint = f"{remote_url}/api/desktop/attendance"
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        endpoint,
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json; charset=utf-8",
+            "X-TimeRecord-Token": token,
+            "User-Agent": "TimeRecordDesktop/1.0",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            status = getattr(response, "status", 0)
+            return 200 <= status < 300, f"HTTP {status}"
+    except urllib.error.HTTPError as exc:
+        return False, f"HTTP {exc.code}"
+    except (OSError, urllib.error.URLError) as exc:
+        return False, str(exc)
+
+
+def fetch_remote_attendance(date_text=None, timeout=8):
+    remote_url = configured_webapp_url()
+    token = configured_desktop_sync_token()
+    if not remote_url or not token:
+        return False, "remote sync is not configured", []
+    params = {"date": date_text or datetime.now().strftime("%Y-%m-%d"), "limit": "1000"}
+    endpoint = f"{remote_url}/api/desktop/attendance?{urllib.parse.urlencode(params)}"
+    request = urllib.request.Request(
+        endpoint,
+        method="GET",
+        headers={
+            "X-TimeRecord-Token": token,
+            "User-Agent": "TimeRecordDesktop/1.0",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            status = getattr(response, "status", 0)
+            data = json.loads(response.read().decode("utf-8"))
+            if 200 <= status < 300 and data.get("ok"):
+                records = data.get("records", [])
+                return True, f"HTTP {status}", records if isinstance(records, list) else []
+            return False, data.get("error", f"HTTP {status}"), []
+    except urllib.error.HTTPError as exc:
+        try:
+            data = json.loads(exc.read().decode("utf-8"))
+            return False, data.get("error", f"HTTP {exc.code}"), []
+        except (OSError, json.JSONDecodeError):
+            return False, f"HTTP {exc.code}", []
+    except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+        return False, str(exc), []
+
+
+def log_desktop_sync(message):
+    ensure_dirs()
+    try:
+        with (DATA_DIR / "desktop_sync.log").open("a", encoding="utf-8") as file:
+            file.write(f"[{now_text()}] {message}\n")
     except OSError:
         pass
 
@@ -215,6 +364,8 @@ def init_db():
                 event_type TEXT NOT NULL CHECK(event_type IN ('checkin', 'checkout')),
                 timestamp TEXT NOT NULL,
                 snapshot_path TEXT,
+                source TEXT NOT NULL DEFAULT 'system',
+                operator_name TEXT,
                 FOREIGN KEY(person_id) REFERENCES persons(id)
             )
             """
@@ -246,6 +397,10 @@ def init_db():
         attendance_columns = {row[1] for row in conn.execute("PRAGMA table_info(attendance)").fetchall()}
         if "snapshot_path" not in attendance_columns:
             conn.execute("ALTER TABLE attendance ADD COLUMN snapshot_path TEXT")
+        if "source" not in attendance_columns:
+            conn.execute("ALTER TABLE attendance ADD COLUMN source TEXT NOT NULL DEFAULT 'system'")
+        if "operator_name" not in attendance_columns:
+            conn.execute("ALTER TABLE attendance ADD COLUMN operator_name TEXT")
         class_count = conn.execute("SELECT COUNT(*) FROM class_names").fetchone()[0]
         if class_count == 0:
             conn.executemany(
@@ -265,6 +420,9 @@ def connect_db():
 
 def start_webapp():
     global WEBAPP_PROCESS, WEBAPP_LOG_HANDLES
+    if configured_webapp_url():
+        return True
+
     if WEBAPP_PROCESS is not None and WEBAPP_PROCESS.poll() is None:
         return True
 
@@ -301,6 +459,20 @@ def start_webapp():
         stop_webapp()
         return False
     return True
+
+
+def webapp_status_message(webapp_started):
+    remote_url = configured_webapp_url()
+    if remote_url:
+        connected, detail = check_remote_webapp(remote_url)
+        sync_text = "attendance sync enabled" if configured_desktop_sync_token() else "attendance sync token missing"
+        if connected:
+            return f"System started; external web app connected: {remote_url}; {sync_text}"
+        return f"System started; external web app not reachable: {remote_url} ({detail}); {sync_text}"
+
+    if webapp_started:
+        return "System started; web app: " + " | ".join(webapp_access_urls())
+    return "System started; web app did not start"
 
 
 def stop_webapp():
@@ -1049,13 +1221,17 @@ def ceil_to_interval(dt, minutes):
 
 def build_presence_summary_rows(rows):
     child_events = []
-    for person_id, name, role, class_name, timestamp, event_type, *_extra in rows:
+    for person_id, name, role, class_name, timestamp, event_type, *extra in rows:
         if role != "children":
             continue
         try:
             event_time = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
         except (TypeError, ValueError):
             continue
+        try:
+            event_id = int(extra[-1]) if extra else 0
+        except (TypeError, ValueError):
+            event_id = 0
         child_events.append(
             {
                 "person_id": person_id,
@@ -1063,6 +1239,7 @@ def build_presence_summary_rows(rows):
                 "class_name": class_name or "Unassigned",
                 "time": event_time,
                 "event_type": event_type,
+                "id": event_id,
             }
         )
 
@@ -1074,7 +1251,7 @@ def build_presence_summary_rows(rows):
     events_by_date = {
         date: sorted(
             (event for event in child_events if event["time"].date() == date),
-            key=lambda event: event["time"],
+            key=lambda event: (event["time"], event["id"]),
         )
         for date in dates
     }
@@ -1115,6 +1292,19 @@ def build_presence_summary_rows(rows):
 
 def acceo_date_text(value):
     return f"{value.month}/{value.day}/{value.year}"
+
+
+def require_pymupdf():
+    try:
+        import fitz
+    except ImportError as exc:
+        raise RuntimeError(
+            "PyMuPDF is required to generate PDF reports. "
+            "Install dependencies with: python -m pip install -r requirements.txt, "
+            "then rebuild the desktop app. "
+            f"Details: {exc}"
+        ) from exc
+    return fitz
 
 
 def monday_for_date(value):
@@ -1207,10 +1397,7 @@ def fitz_get_text_length(text, size):
 
 
 def generate_acceo_detail_attendance_pdf(start_date, output_path):
-    try:
-        import fitz
-    except ImportError as exc:
-        raise RuntimeError("PyMuPDF is required to generate PDF reports.") from exc
+    fitz = require_pymupdf()
 
     start_date = monday_for_date(start_date)
     week_starts = [start_date + timedelta(days=7 * index) for index in range(4)]
@@ -1230,12 +1417,12 @@ def generate_acceo_detail_attendance_pdf(start_date, output_path):
     for person_id, child_name, class_name in children:
         page = doc.new_page(width=612, height=792)
         page.draw_rect(fitz.Rect(51, 69, 574, 85), color=(0.5, 0.5, 0.5), fill=(0.5, 0.5, 0.5))
-        draw_text(page, 428, 82, "Garderie L'Univers de CassiopÃ©e", size=9)
+        draw_text(page, 428, 82, "Garderie L'Univers de Cassiopée", size=9)
         draw_text(
             page,
             51,
             64,
-            f"Fiche d'assiduitÃ© dÃ©taillÃ©e du {acceo_date_text(start_date)}   au {acceo_date_text(end_date)}",
+            f"Fiche d'assiduité détaillée du {acceo_date_text(start_date)}   au {acceo_date_text(end_date)}",
             size=12,
         )
 
@@ -1246,28 +1433,28 @@ def generate_acceo_detail_attendance_pdf(start_date, output_path):
         draw_text(page, 51, 130, "Nom du parent :", size=9)
         draw_text(page, 51, 143, "Nom du groupe :", size=9)
         draw_text(page, 178, 143, class_name or " ", size=9)
-        draw_text(page, 51, 157, "Date de fin de frÃ©quentation :", size=9)
+        draw_text(page, 51, 157, "Date de fin de fréquentation :", size=9)
 
         page.draw_rect(fitz.Rect(51.5, 169.5, 572, 258), color=(0, 0, 0), width=0.5)
-        draw_text(page, 57, 184, "LÃ‰GENDE", size=9)
-        draw_text(page, 57, 199, "Codes de prÃ©sences", size=9)
+        draw_text(page, 57, 184, "LÉGENDE", size=9)
+        draw_text(page, 57, 199, "Codes de présences", size=9)
         draw_text(page, 318, 199, "Codes d'absence", size=9)
         legend_left = [
-            ("P :", "PrÃ©sence 1 jour"),
-            ("R :", "Enfant remplaÃ§ant 1 jour"),
-            ("E : PÃ©dagogique 1 jour", ""),
-            ("PÂ½ :", "PrÃ©sence Â½ jour"),
-            ("RÂ½ :", "Enfant remplaÃ§ant Â½ jour"),
-            ("EÂ½ :", "PÃ©dagogique Â½ jour"),
+            ("P :", "Présence 1 jour"),
+            ("R :", "Enfant remplaçant 1 jour"),
+            ("E : Pédagogique 1 jour", ""),
+            ("P½ :", "Présence ½ jour"),
+            ("R½ :", "Enfant remplaçant ½ jour"),
+            ("E½ :", "Pédagogique ½ jour"),
         ]
         legend_right = [
             ("A :", "Absence 1 jour"),
             ("M :", "Maladie 1 jour"),
             ("V :", "Vacances 1 jour"),
-            ("F :", "FermÃ© 1 jour"),
-            ("AÂ½ :", "Absence Â½ jour"),
-            ("MÂ½ :", "Maladie Â½ jour"),
-            ("VÂ½ :", "Vacances Â½ jour"),
+            ("F :", "Fermé 1 jour"),
+            ("A½ :", "Absence ½ jour"),
+            ("M½ :", "Maladie ½ jour"),
+            ("V½ :", "Vacances ½ jour"),
         ]
         for idx, (code, label) in enumerate(legend_left):
             y = 215 + (idx % 3) * 18
@@ -1283,7 +1470,7 @@ def generate_acceo_detail_attendance_pdf(start_date, output_path):
 
         page.draw_rect(fitz.Rect(51.5, 267, 572, 359), color=(0, 0, 0), width=0.5)
         header_y = 281
-        draw_text(page, 69, header_y, "Semaine dÃ©butant le", size=9)
+        draw_text(page, 69, header_y, "Semaine débutant le", size=9)
         for idx, day_name in enumerate(day_names):
             draw_centered_text(page, day_x[idx] - 8, header_y, day_width, day_name, size=9)
 
@@ -1304,26 +1491,23 @@ def generate_acceo_detail_attendance_pdf(start_date, output_path):
         page.draw_rect(fitz.Rect(51.5, 369, 572, 425), color=(0, 0, 0), width=0.5)
         draw_text(page, 57, 390, "Signature du service de garde :", size=9)
         draw_text(page, 438, 390, "Date :", size=9)
-        draw_text(page, 57, 414, "J'atteste que les renseignements inscrits sur cette fiche d'assiduitÃ© correspondent Ã  la prÃ©sence rÃ©elle de cet enfant.", size=7)
+        draw_text(page, 57, 414, "J'atteste que les renseignements inscrits sur cette fiche d'assiduité correspondent à la présence réelle de cet enfant.", size=7)
 
         page.draw_rect(fitz.Rect(51.5, 436, 572, 492), color=(0, 0, 0), width=0.5)
         draw_text(page, 57, 456, "Signature du parent :", size=9)
         draw_text(page, 438, 456, "Date :", size=9)
-        draw_text(page, 57, 480, "J'atteste que les renseignements inscrits sur cette fiche d'assiduitÃ© correspondent Ã  la prÃ©sence rÃ©elle de mon enfant.", size=7)
+        draw_text(page, 57, 480, "J'atteste que les renseignements inscrits sur cette fiche d'assiduité correspondent à la présence réelle de mon enfant.", size=7)
 
-        draw_text(page, 410, 767, f"ImprimÃ© le {acceo_date_text(now.date())} Ã  {now.strftime('%I:%M %p').lstrip('0')}", size=8)
+        draw_text(page, 410, 767, f"Imprimé le {acceo_date_text(now.date())} à {now.strftime('%H:%M')}", size=8)
         draw_text(page, 515, 780, "Page 1 de 1", size=8)
-        draw_text(page, 331, 790, "Ce rapport a Ã©tÃ© produit avec ACCEO Services de garde.", size=8)
+        draw_text(page, 331, 790, "Ce rapport a été produit avec ACCEO Services de garde.", size=8)
 
     doc.save(str(output_path))
     doc.close()
 
 
 def generate_acceo_summary_attendance_pdf(start_date, output_path):
-    try:
-        import fitz
-    except ImportError as exc:
-        raise RuntimeError("PyMuPDF is required to generate PDF reports.") from exc
+    fitz = require_pymupdf()
 
     start_date = monday_for_date(start_date)
     week_starts = [start_date + timedelta(days=7 * index) for index in range(4)]
@@ -1341,8 +1525,8 @@ def generate_acceo_summary_attendance_pdf(start_date, output_path):
 
     for person_id, child_name, class_name in children:
         page = doc.new_page(width=792, height=612)
-        draw_text(page, 40, 48, "Garderie L'Univers de CassiopÃ©e", size=9)
-        draw_text(page, 40, 72, f"Fiche d'assiduitÃ© du {acceo_date_text(start_date)}  au {acceo_date_text(end_date)}", size=13)
+        draw_text(page, 40, 48, "Garderie L'Univers de Cassiopée", size=9)
+        draw_text(page, 40, 72, f"Fiche d'assiduité du {acceo_date_text(start_date)}  au {acceo_date_text(end_date)}", size=13)
 
         draw_text(page, 40, 105, "Groupe :", size=8)
         draw_text(page, 130, 105, class_name or " ", size=8)
@@ -1352,18 +1536,18 @@ def generate_acceo_summary_attendance_pdf(start_date, output_path):
         draw_text(page, 130, 135, child_name, size=8)
         draw_text(page, 40, 150, "Naissance :", size=8)
         draw_text(page, 40, 165, "Composante :", size=8)
-        draw_text(page, 130, 165, "Garderie L'Univers de CassiopÃ©e", size=8)
+        draw_text(page, 130, 165, "Garderie L'Univers de Cassiopée", size=8)
         draw_text(page, 40, 180, "Payeur principal :", size=8)
-        draw_text(page, 40, 195, "Nom de l'Ã©tablissement :", size=8)
-        draw_text(page, 130, 195, "Garderie L'Univers de CassiopÃ©e", size=8)
-        draw_text(page, 40, 210, "NumÃ©ro d'Ã©tablissement :", size=8)
+        draw_text(page, 40, 195, "Nom de l'établissement :", size=8)
+        draw_text(page, 130, 195, "Garderie L'Univers de Cassiopée", size=8)
+        draw_text(page, 40, 210, "Numéro d'établissement :", size=8)
 
-        draw_text(page, 430, 105, "LÃ©gende :", size=8)
-        legend = ["A : Absent", "E : PÃ©dagogique", "F : FÃ©riÃ©", "M : Maladie", "P : PrÃ©sent", "R : Remplacement", "V : Vacances"]
+        draw_text(page, 430, 105, "Légende :", size=8)
+        legend = ["A : Absent", "E : Pédagogique", "F : Férié", "M : Maladie", "P : Présent", "R : Remplacement", "V : Vacances"]
         for idx, text in enumerate(legend):
             draw_text(page, 430 + (idx // 4) * 115, 120 + (idx % 4) * 15, text, size=8)
 
-        draw_text(page, 430, 190, "Cumulatif des journÃ©es", size=8)
+        draw_text(page, 430, 190, "Cumulatif des journées", size=8)
         draw_text(page, 548, 190, "Absence", size=8)
         draw_text(page, 620, 190, "Total", size=8)
 
@@ -1383,7 +1567,7 @@ def generate_acceo_summary_attendance_pdf(start_date, output_path):
 
             draw_text(page, 40, y, f"Du {acceo_date_text(week_start)}  au {acceo_date_text(week_end)}", size=8)
             draw_text(page, 40, y + 13, "Heures de garde", size=7)
-            draw_text(page, 40, y + 26, "Ã‰quivalence en journÃ©e ou demi-journÃ©e", size=7)
+            draw_text(page, 40, y + 26, "Équivalence en journée ou demi-journée", size=7)
 
             for day_index in range(7):
                 current_date = week_start + timedelta(days=day_index)
@@ -1414,11 +1598,11 @@ def generate_acceo_summary_attendance_pdf(start_date, output_path):
         draw_text(page, 420, 542, "Signature du responsable :", size=8)
         draw_text(page, 40, 565, "Date :", size=8)
         draw_text(page, 420, 565, "Date :", size=8)
-        draw_text(page, 40, 510, "Je dÃ©clare que les renseignements mentionnÃ©s sur cette fiche d'assiduitÃ© sont exacts.", size=8)
+        draw_text(page, 40, 510, "Je déclare que les renseignements mentionnés sur cette fiche d'assiduité sont exacts.", size=8)
 
-        draw_text(page, 610, 574, f"ImprimÃ© le {acceo_date_text(now.date())} Ã  {now.strftime('%I:%M %p').lstrip('0')}", size=8)
+        draw_text(page, 610, 574, f"Imprimé le {acceo_date_text(now.date())} à {now.strftime('%H:%M')}", size=8)
         draw_text(page, 710, 590, "Page 1 de 1", size=8)
-        draw_text(page, 530, 605, "Ce rapport a Ã©tÃ© produit avec ACCEO Services de garde.", size=8)
+        draw_text(page, 530, 605, "Ce rapport a été produit avec ACCEO Services de garde.", size=8)
 
     doc.save(str(output_path))
     doc.close()
@@ -1467,6 +1651,7 @@ class AttendanceApp:
         self.refresh_records()
         self.update_camera()
         self.schedule_database_sync()
+        self.schedule_remote_attendance_pull()
         self.schedule_daily_closeout()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
@@ -1516,12 +1701,12 @@ class AttendanceApp:
 
         Label(center, textvariable=self.status_var, anchor="w", fg="#1b5e20").pack(fill="x")
 
-        setup_color = "#9fd0ff"
-        class_color = "#7fc8ff"
-        prompt_color = "#b9ed9d"
-        stats_color = "#ffd966"
-        fiche_color = "#d7b5ff"
-        danger_color = "#ffb3ba"
+        setup_color = "#d8ecff"
+        class_color = "#dff3ff"
+        prompt_color = "#e3f7d9"
+        stats_color = "#fff1bf"
+        fiche_color = "#f0e7fb"
+        danger_color = "#ffd7dc"
 
         form = LabelFrame(left_controls, text="Person Setup", padx=10, pady=10, bg=setup_color)
         form.pack(fill="x")
@@ -1537,8 +1722,8 @@ class AttendanceApp:
             state="readonly",
         ).pack(fill="x", pady=(2, 8))
 
-        self.make_button(form, "Add Person (Teacher: 10 Photos)", self.add_person, setup_color, fill="x", pady=(10, 0))
-        self.make_button(form, "Import Children from children/list.xlsx", self.import_children_from_xlsx, setup_color, fill="x", pady=(8, 0))
+        self.make_button(form, "Add Person (Teacher: 10 Photos)", self.add_person, setup_color, fill="x", pady=(0, 0))
+        self.make_button(form, "Import Children from children/list.xlsx", self.import_children_from_xlsx, setup_color, fill="x", pady=(0, 0))
 
         class_box = LabelFrame(left_controls, text="Class (Child only)", padx=10, pady=10, bg=class_color)
         class_box.pack(fill="x", pady=(10, 0))
@@ -1575,13 +1760,13 @@ class AttendanceApp:
             value=ATTENDANCE_PROMPT_BELL,
             bg=prompt_color,
             activebackground=prompt_color,
-        ).pack(anchor="w", pady=(6, 0))
+        ).pack(anchor="w", pady=(0, 0))
 
         reports_box = ttk.LabelFrame(left_controls, text="Reports", padding=10)
         reports_box.pack(fill="x", pady=(10, 0))
         self.make_button(reports_box, "Presence Summary", self.show_presence_summary, stats_color, fill="x")
-        self.make_button(reports_box, "Export Excel", self.export_excel, stats_color, fill="x", pady=(8, 0))
-        self.make_button(reports_box, "Generate 4-Week Fiche d'assiduitÃ©", self.open_acceo_detail_report_dialog, fiche_color, fill="x", pady=(14, 0))
+        self.make_button(reports_box, "Export Excel", self.export_excel, stats_color, fill="x", pady=(0, 0))
+        self.make_button(reports_box, "Generate 4-Week Fiche d'assiduité", self.open_acceo_detail_report_dialog, fiche_color, fill="x", pady=(14, 0))
         self.make_button(reports_box, "Manage Closed Dates (F)", self.open_closed_dates_dialog, fiche_color, fill="x", pady=(8, 0))
 
         persons_box = ttk.LabelFrame(right_controls, text="People", padding=10)
@@ -1609,21 +1794,49 @@ class AttendanceApp:
         self.person_list.column("class", width=150, anchor="w")
         self.person_list.column("created", width=150, anchor="center")
         self.person_list.pack(fill=BOTH, expand=True)
-        self.delete_person_button = self.make_button(persons_box, "Delete Selected Person(s) - Total: 0", self.delete_selected_person, danger_color, fill="x", pady=(8, 0))
+        self.person_list.bind("<<TreeviewSelect>>", self.update_manual_attendance_buttons)
+        manual_attendance_bar = Frame(persons_box)
+        manual_attendance_bar.pack(fill="x", pady=(8, 0))
+        self.manual_checkin_button = self.make_button(
+            manual_attendance_bar,
+            "Check In Selected Person",
+            self.checkin_selected_person,
+            prompt_color,
+            side=LEFT,
+            fill="x",
+            expand=True,
+            padx=(0, 4),
+        )
+        self.manual_checkout_button = self.make_button(
+            manual_attendance_bar,
+            "Check Out Selected Person",
+            self.checkout_selected_person,
+            prompt_color,
+            side=LEFT,
+            fill="x",
+            expand=True,
+            padx=(4, 0),
+        )
+        self.manual_attendance_button_color = prompt_color
+        self.manual_attendance_disabled_color = "#eeeeee"
+        self.update_manual_attendance_buttons()
+        self.delete_person_button = self.make_button(persons_box, "Delete Selected Person(s) - Total: 0", self.delete_selected_person, danger_color, fill="x", pady=(0, 0))
 
         records_box = ttk.LabelFrame(right_controls, text="Recent Records", padding=10)
         records_box.pack(fill=BOTH, expand=True, pady=(10, 0))
-        record_columns = ("time", "name", "role", "event", "photo")
+        record_columns = ("time", "name", "role", "event", "by", "photo")
         self.record_list = ttk.Treeview(records_box, columns=record_columns, show="headings", height=9, selectmode="browse")
         self.record_list.heading("time", text="Time")
         self.record_list.heading("name", text="Name")
         self.record_list.heading("role", text="Role")
         self.record_list.heading("event", text="Event")
+        self.record_list.heading("by", text="By")
         self.record_list.heading("photo", text="Photo")
         self.record_list.column("time", width=155, anchor="center")
-        self.record_list.column("name", width=175, anchor="w")
+        self.record_list.column("name", width=155, anchor="w")
         self.record_list.column("role", width=70, anchor="center")
         self.record_list.column("event", width=95, anchor="center")
+        self.record_list.column("by", width=75, anchor="center")
         self.record_list.column("photo", width=80, anchor="center")
         self.record_list.pack(fill=BOTH, expand=True)
         self.delete_record_button = self.make_button(records_box, "Delete Selected Record - Checked In: 0", self.delete_selected_record, danger_color, fill="x", pady=(8, 0))
@@ -2003,7 +2216,7 @@ class AttendanceApp:
             if prompted_sample_number != target_sample_number:
                 prompt = f"Please take photo {target_sample_number}."
                 self.status_var.set(prompt)
-                speak(prompt)
+                play_system_bell()
                 prompted_sample_number = target_sample_number
                 time.sleep(1.0)
             attempts += 1
@@ -2031,7 +2244,7 @@ class AttendanceApp:
                 else:
                     prompt = f"Photo {len(faces)} complete."
                 self.status_var.set(prompt)
-                speak(prompt)
+                play_system_bell()
                 time.sleep(1.0)
             time.sleep(0.08)
         return faces
@@ -2094,38 +2307,55 @@ class AttendanceApp:
             return None
         return {"id": row[0], "name": row[1], "role": row[2]}
 
-    def record_person(self, person, current_time):
+    def record_person(self, person, current_time, event_type=None, enforce_cooldown=True, source="desktop"):
         person_id = person["id"]
-        last_record_time = self.last_auto_record_times.get(person_id, 0)
-        if person["role"] == "children":
-            cooldown_seconds = CHILD_RECORD_COOLDOWN_SECONDS
-        else:
-            cooldown_seconds = TEACHER_RECORD_COOLDOWN_SECONDS
-        elapsed_seconds = current_time - last_record_time
-        if elapsed_seconds < cooldown_seconds:
-            remaining_minutes = int((cooldown_seconds - elapsed_seconds + 59) // 60)
-            self.status_var.set(f"{person['name']} already recorded. Please wait {remaining_minutes} minute(s).")
-            return
+        if enforce_cooldown:
+            last_record_time = self.last_auto_record_times.get(person_id, 0)
+            if person["role"] == "children":
+                cooldown_seconds = CHILD_RECORD_COOLDOWN_SECONDS
+            else:
+                cooldown_seconds = TEACHER_RECORD_COOLDOWN_SECONDS
+            elapsed_seconds = current_time - last_record_time
+            if elapsed_seconds < cooldown_seconds:
+                remaining_minutes = int((cooldown_seconds - elapsed_seconds + 59) // 60)
+                self.status_var.set(f"{person['name']} already recorded. Please wait {remaining_minutes} minute(s).")
+                return
 
         try:
-            event_type = self.next_event_type(person_id)
+            if event_type is None:
+                event_type = self.next_event_type(person_id)
+            elif event_type not in EVENT_LABELS:
+                self.status_var.set("Skipping invalid attendance event.")
+                return
             should_speak = self.is_first_event_today(person_id, event_type)
         except sqlite3.Error:
             self.status_var.set("Skipping attendance lookup error. Continuing detection.")
             return
         timestamp = now_text()
         snapshot_path = save_teacher_attendance_snapshot(person, event_type, self.current_frame)
+        operator_name = person["name"] if source == "desktop" else OPERATION_LABELS["system"]
         try:
             with connect_db() as conn:
                 conn.execute(
-                    "INSERT INTO attendance(person_id, name, role, event_type, timestamp, snapshot_path) VALUES (?, ?, ?, ?, ?, ?)",
-                    (person["id"], person["name"], person["role"], event_type, timestamp, snapshot_path),
+                    "INSERT INTO attendance(person_id, name, role, event_type, timestamp, snapshot_path, source, operator_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (person["id"], person["name"], person["role"], event_type, timestamp, snapshot_path, source, operator_name),
                 )
         except sqlite3.Error:
             self.status_var.set("Skipping attendance save error. Continuing detection.")
             return
 
         self.last_auto_record_times[person_id] = current_time
+        self.queue_remote_attendance_sync(
+            {
+                "person_id": person["id"],
+                "name": person["name"],
+                "role": person["role"],
+                "event_type": event_type,
+                "timestamp": timestamp,
+                "source": source,
+                "operator_name": operator_name,
+            }
+        )
         event_label = EVENT_LABELS[event_type]
         role_label = ROLE_LABELS.get(person["role"], person["role"])
         self.status_var.set(f"{person['name']} ({role_label}) {event_label} successful  {timestamp}")
@@ -2134,6 +2364,230 @@ class AttendanceApp:
         elif should_speak:
             speak(attendance_voice_prompt(person, event_type))
         self.refresh_records()
+        self.update_manual_attendance_buttons()
+
+    def queue_remote_attendance_sync(self, payload):
+        if not configured_webapp_url() or not configured_desktop_sync_token():
+            return
+        worker = threading.Thread(target=self.remote_attendance_sync_worker, args=(payload,), daemon=True)
+        worker.start()
+
+    def remote_attendance_sync_worker(self, payload):
+        ok, detail = post_remote_attendance(payload)
+        person_name = payload.get("name", "Unknown")
+        event_label = EVENT_LABELS.get(payload.get("event_type"), payload.get("event_type", "event"))
+        if ok:
+            message = f"Network sync complete: {person_name} {event_label}"
+        else:
+            message = f"Network sync failed: {person_name} {event_label} ({detail})"
+        log_desktop_sync(message)
+        try:
+            self.root.after(0, lambda: self.status_var.set(message))
+        except RuntimeError:
+            pass
+
+    def schedule_remote_attendance_pull(self):
+        if configured_webapp_url() and configured_desktop_sync_token():
+            worker = threading.Thread(target=self.remote_attendance_pull_worker, daemon=True)
+            worker.start()
+        self.root.after(REMOTE_ATTENDANCE_PULL_INTERVAL_MS, self.schedule_remote_attendance_pull)
+
+    def remote_attendance_pull_worker(self):
+        ok, detail, records = fetch_remote_attendance()
+        if not ok:
+            log_desktop_sync(f"Network pull failed: {detail}")
+            return
+        try:
+            imported_count = self.import_remote_attendance_records(records)
+        except sqlite3.Error as exc:
+            log_desktop_sync(f"Network pull database error: {exc}")
+            return
+        if imported_count:
+            message = f"Network pull imported {imported_count} attendance record(s)"
+            log_desktop_sync(message)
+            try:
+                self.root.after(0, self.refresh_persons)
+                self.root.after(0, self.refresh_records)
+                self.root.after(0, lambda: self.status_var.set(message))
+            except RuntimeError:
+                pass
+
+    def import_remote_attendance_records(self, records):
+        imported_count = 0
+        with connect_db() as conn:
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+                name = str(record.get("name", "")).strip()
+                role = str(record.get("role", "")).strip()
+                event_type = str(record.get("event_type", "")).strip()
+                raw_timestamp = str(record.get("timestamp", "")).strip()
+                timestamp = raw_timestamp
+                class_name = str(record.get("class_name", "")).strip()
+                source = str(record.get("source", "system")).strip()
+                if source != "desktop":
+                    source = "system"
+                operator_name = str(record.get("operator_name", "")).strip()
+                if not operator_name:
+                    operator_name = name if source == "desktop" else OPERATION_LABELS["system"]
+                if not name or role not in {"children", "teachers"} or event_type not in EVENT_LABELS:
+                    continue
+                try:
+                    timestamp = normalize_remote_attendance_timestamp(timestamp)
+                except ValueError:
+                    continue
+                person = conn.execute(
+                    "SELECT id FROM persons WHERE lower(name) = lower(?) AND role = ? ORDER BY id LIMIT 1",
+                    (name, role),
+                ).fetchone()
+                if person:
+                    person_id = person[0]
+                    if role == "children" and class_name:
+                        conn.execute("UPDATE persons SET class_name = ? WHERE id = ? AND COALESCE(class_name, '') = ''", (class_name, person_id))
+                else:
+                    cursor = conn.execute(
+                        "INSERT INTO persons(name, role, class_name, photo_path, qr_token, created_at) VALUES (?, ?, ?, '', ?, ?)",
+                        (name, role, class_name if role == "children" else "", f"CHILD:{name}" if role == "children" else None, now_text()),
+                    )
+                    person_id = cursor.lastrowid
+
+                duplicate = conn.execute(
+                    """
+                    SELECT 1 FROM attendance
+                    WHERE name = ? AND role = ? AND event_type = ? AND timestamp = ?
+                    LIMIT 1
+                    """,
+                    (name, role, event_type, timestamp),
+                ).fetchone()
+                if duplicate:
+                    continue
+                if raw_timestamp != timestamp:
+                    raw_duplicate = conn.execute(
+                        """
+                        SELECT id FROM attendance
+                        WHERE name = ? AND role = ? AND event_type = ? AND timestamp = ?
+                        LIMIT 1
+                        """,
+                        (name, role, event_type, raw_timestamp),
+                    ).fetchone()
+                    if raw_duplicate:
+                        conn.execute(
+                            "UPDATE attendance SET timestamp = ? WHERE id = ?",
+                            (timestamp, raw_duplicate[0]),
+                        )
+                        imported_count += 1
+                        continue
+                conn.execute(
+                    "INSERT INTO attendance(person_id, name, role, event_type, timestamp, snapshot_path, source, operator_name) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)",
+                    (person_id, name, role, event_type, timestamp, source, operator_name),
+                )
+                imported_count += 1
+        return imported_count
+
+    def selected_person_attendance_status(self):
+        selection = self.person_list.selection()
+        if len(selection) != 1:
+            return None
+        try:
+            person_id = int(selection[0])
+        except ValueError:
+            return None
+        today = datetime.now().strftime("%Y-%m-%d")
+        try:
+            with connect_db() as conn:
+                row = conn.execute(
+                    """
+                    SELECT persons.role, attendance.event_type
+                    FROM persons
+                    LEFT JOIN attendance
+                      ON attendance.person_id = persons.id
+                     AND attendance.timestamp LIKE ?
+                    WHERE persons.id = ?
+                    ORDER BY attendance.timestamp DESC, attendance.id DESC
+                    LIMIT 1
+                    """,
+                    (f"{today}%", person_id),
+                ).fetchone()
+        except sqlite3.Error:
+            return None
+        if not row or row[0] not in {"children", "teachers"}:
+            return None
+        return "in" if row[1] == "checkin" else "out"
+
+    def set_manual_attendance_button_state(self, button, enabled):
+        color = self.manual_attendance_button_color if enabled else self.manual_attendance_disabled_color
+        button.configure(
+            state="normal" if enabled else "disabled",
+            bg=color,
+            activebackground=color,
+            disabledforeground="#777777",
+        )
+
+    def update_manual_attendance_buttons(self, _event=None):
+        if not hasattr(self, "manual_checkin_button") or not hasattr(self, "manual_checkout_button"):
+            return
+        status = self.selected_person_attendance_status()
+        if status == "in":
+            self.set_manual_attendance_button_state(self.manual_checkin_button, False)
+            self.set_manual_attendance_button_state(self.manual_checkout_button, True)
+        elif status == "out":
+            self.set_manual_attendance_button_state(self.manual_checkin_button, True)
+            self.set_manual_attendance_button_state(self.manual_checkout_button, False)
+        else:
+            self.set_manual_attendance_button_state(self.manual_checkin_button, False)
+            self.set_manual_attendance_button_state(self.manual_checkout_button, False)
+
+    def selected_person_for_manual_attendance(self):
+        selection = self.person_list.selection()
+        if len(selection) != 1:
+            messagebox.showwarning("Notice", "Please select exactly one person.")
+            return None
+        try:
+            person_id = int(selection[0])
+        except ValueError:
+            messagebox.showwarning("Notice", "Please refresh the people list and try again.")
+            return None
+        try:
+            with connect_db() as conn:
+                row = conn.execute(
+                    "SELECT id, name, role FROM persons WHERE id = ?",
+                    (person_id,),
+                ).fetchone()
+        except sqlite3.Error:
+            self.status_var.set("Cannot load selected person. Please try again.")
+            return None
+        if not row:
+            messagebox.showwarning("Notice", "Selected person was already deleted.")
+            self.refresh_persons()
+            return None
+        if row[2] not in {"children", "teachers"}:
+            messagebox.showwarning("Notice", "Manual buttons are for children and teachers only.")
+            return None
+        return {"id": row[0], "name": row[1], "role": row[2]}
+
+    def checkin_selected_person(self):
+        person = self.selected_person_for_manual_attendance()
+        if person is None:
+            return
+        self.record_person(person, time.time(), event_type="checkin", enforce_cooldown=False, source="desktop_manual")
+
+    def checkout_selected_person(self):
+        person = self.selected_person_for_manual_attendance()
+        if person is None:
+            return
+        self.record_person(person, time.time(), event_type="checkout", enforce_cooldown=False, source="desktop_manual")
+
+    def selected_child_attendance_status(self):
+        return self.selected_person_attendance_status()
+
+    def selected_child_for_manual_attendance(self):
+        return self.selected_person_for_manual_attendance()
+
+    def checkin_selected_child(self):
+        self.checkin_selected_person()
+
+    def checkout_selected_child(self):
+        self.checkout_selected_person()
 
     def next_event_type(self, person_id):
         today = datetime.now().strftime("%Y-%m-%d")
@@ -2295,22 +2749,23 @@ class AttendanceApp:
                 values=(name, role_label, class_name if role == "children" else "", created_at),
             )
         self.delete_person_button.configure(text=f"Delete Selected Person(s) - Total: {len(self.person_list_ids)}")
+        self.update_manual_attendance_buttons()
 
     def refresh_records(self):
         self.record_list.delete(*self.record_list.get_children())
         self.record_list_ids = []
         with connect_db() as conn:
             rows = conn.execute(
-                "SELECT id, name, role, event_type, timestamp, COALESCE(snapshot_path, '') FROM attendance ORDER BY id DESC LIMIT 30"
+                "SELECT id, name, role, event_type, timestamp, COALESCE(snapshot_path, ''), COALESCE(source, 'system'), COALESCE(operator_name, '') FROM attendance ORDER BY id DESC LIMIT 30"
             ).fetchall()
             checked_in_count = self.checked_in_without_checkout_count(conn)
-        for record_id, name, role, event_type, timestamp, snapshot_path in rows:
+        for record_id, name, role, event_type, timestamp, snapshot_path, source, operator_name in rows:
             self.record_list_ids.append(record_id)
             self.record_list.insert(
                 "",
                 END,
                 iid=str(record_id),
-                values=(timestamp, name, ROLE_LABELS.get(role, role), EVENT_LABELS.get(event_type, event_type), "Saved" if snapshot_path else ""),
+                values=(timestamp, name, ROLE_LABELS.get(role, role), EVENT_LABELS.get(event_type, event_type), attendance_operator_name(name, source, operator_name), "Saved" if snapshot_path else ""),
             )
         self.delete_record_button.configure(text=f"Delete Selected Record - Checked In: {checked_in_count}")
 
@@ -2405,11 +2860,11 @@ class AttendanceApp:
         with connect_db() as conn:
             return conn.execute(
                 f"""
-                SELECT attendance.person_id, attendance.name, attendance.role, COALESCE(persons.class_name, ''), attendance.timestamp, attendance.event_type, COALESCE(attendance.snapshot_path, '')
+                SELECT attendance.person_id, attendance.name, attendance.role, COALESCE(persons.class_name, ''), attendance.timestamp, attendance.event_type, COALESCE(attendance.snapshot_path, ''), COALESCE(attendance.source, 'system'), COALESCE(attendance.operator_name, ''), attendance.id
                 FROM attendance
                 LEFT JOIN persons ON persons.id = attendance.person_id
                 {date_filter}
-                ORDER BY attendance.timestamp DESC
+                ORDER BY attendance.timestamp DESC, attendance.id DESC
                 """,
                 params,
             ).fetchall()
@@ -2480,8 +2935,8 @@ class AttendanceApp:
 
     def write_daily_export_files(self, date_text, rows):
         export_rows = [
-            [name, ROLE_LABELS.get(role, role), class_name, timestamp, EVENT_LABELS.get(event_type, event_type), snapshot_path]
-            for _person_id, name, role, class_name, timestamp, event_type, snapshot_path in rows
+            [name, ROLE_LABELS.get(role, role), class_name, timestamp, EVENT_LABELS.get(event_type, event_type), attendance_operator_name(name, source, operator_name), snapshot_path]
+            for _person_id, name, role, class_name, timestamp, event_type, snapshot_path, source, operator_name, *_extra in rows
         ]
         summary_rows = build_presence_summary_rows(rows)
         stamp = date_text.replace("-", "")
@@ -2492,7 +2947,7 @@ class AttendanceApp:
             [
                 {
                     "name": "Attendance Records",
-                    "headers": ["Name", "Role", "Class", "Time", "Type", "Snapshot Photo"],
+                    "headers": ["Name", "Role", "Class", "Time", "Type", "By", "Snapshot Photo"],
                     "rows": export_rows,
                 }
             ],
@@ -2590,11 +3045,11 @@ class AttendanceApp:
                 for col_index, day in enumerate(week):
                     date_text = day.strftime("%Y-%m-%d")
                     is_current_month = day.month == selected_month.month
-                    color = "#d7b5ff" if date_text == selected_text else "#ffffff"
+                    color = "#f0e7fb" if date_text == selected_text else "#ffffff"
                     if date_text == today_text:
-                        color = "#ffd966"
+                        color = "#fff6d8"
                     if not is_current_month:
-                        color = "#eeeeee"
+                        color = "#f3f3f3"
                     button = Button(
                         days_frame,
                         text=str(day.day),
@@ -2630,7 +3085,7 @@ class AttendanceApp:
     def open_acceo_detail_report_dialog(self):
         default_start = monday_for_date(datetime.now().date()).strftime("%Y-%m-%d")
         window = Toplevel(self.root)
-        window.title("Generate 4-Week Fiche d'assiduitÃ©")
+        window.title("Generate 4-Week Fiche d'assiduité")
         window.geometry("460x520")
         window.resizable(False, False)
 
@@ -2687,11 +3142,11 @@ class AttendanceApp:
                 for col_index, day in enumerate(week):
                     date_text = day.strftime("%Y-%m-%d")
                     is_current_month = day.month == selected_month.month
-                    color = "#d7b5ff" if date_text in selected_dates else "#ffffff"
+                    color = "#f0e7fb" if date_text in selected_dates else "#ffffff"
                     if date_text == today_text:
-                        color = "#ffd966"
+                        color = "#fff6d8"
                     if not is_current_month:
-                        color = "#eeeeee"
+                        color = "#f3f3f3"
                     button = Button(
                         days_frame,
                         text=str(day.day),
@@ -2764,7 +3219,7 @@ class AttendanceApp:
         else:
             default_name = f"fiche_assiduite_detaillee_{start_date.strftime('%Y%m%d')}_{(start_date + timedelta(days=27)).strftime('%Y%m%d')}.pdf"
         path = filedialog.asksaveasfilename(
-            title="Save 4-Week Fiche d'assiduitÃ©",
+            title="Save 4-Week Fiche d'assiduité",
             initialdir=str(FORM_DIR),
             initialfile=default_name,
             defaultextension=".pdf",
@@ -2780,11 +3235,11 @@ class AttendanceApp:
                 generate_acceo_detail_attendance_pdf(start_date, Path(path))
         except (OSError, sqlite3.Error, RuntimeError, ValueError) as exc:
             messagebox.showerror("Generate Failed", str(exc))
-            self.status_var.set(f"Fiche d'assiduitÃ© generation failed: {exc}")
+            self.status_var.set(f"Fiche d'assiduité generation failed: {exc}")
             return
 
         window.destroy()
-        self.status_var.set(f"Generated Fiche d'assiduitÃ©: {path}")
+        self.status_var.set(f"Generated Fiche d'assiduité: {path}")
         messagebox.showinfo("Complete", f"Generated PDF:\n{path}")
 
     def open_closed_dates_dialog(self):
@@ -2856,11 +3311,11 @@ class AttendanceApp:
                 for col_index, day in enumerate(week):
                     date_text = day.strftime("%Y-%m-%d")
                     is_current_month = day.month == selected_month.month
-                    color = "#eadcf8" if date_text in closed_dates else "#ffffff"
+                    color = "#f0e7fb" if date_text in closed_dates else "#ffffff"
                     if date_text == today_text:
-                        color = "#fff2cc"
+                        color = "#fff6d8"
                     if not is_current_month:
-                        color = "#eeeeee"
+                        color = "#f3f3f3"
                     button = Button(
                         days_frame,
                         text=str(day.day),
@@ -2926,8 +3381,8 @@ class AttendanceApp:
         rows = self.attendance_export_source_rows(export_date)
 
         export_rows = [
-            [name, ROLE_LABELS.get(role, role), class_name, timestamp, EVENT_LABELS.get(event_type, event_type), snapshot_path]
-            for _person_id, name, role, class_name, timestamp, event_type, snapshot_path in rows
+            [name, ROLE_LABELS.get(role, role), class_name, timestamp, EVENT_LABELS.get(event_type, event_type), attendance_operator_name(name, source, operator_name), snapshot_path]
+            for _person_id, name, role, class_name, timestamp, event_type, snapshot_path, source, operator_name, *_extra in rows
         ]
         summary_rows = build_presence_summary_rows(rows)
         write_xlsx_workbook(
@@ -2935,7 +3390,7 @@ class AttendanceApp:
             [
                 {
                     "name": "Attendance Records",
-                    "headers": ["Name", "Role", "Class", "Time", "Type", "Snapshot Photo"],
+                    "headers": ["Name", "Role", "Class", "Time", "Type", "By", "Snapshot Photo"],
                     "rows": export_rows,
                 },
                 {
@@ -2962,10 +3417,7 @@ def main():
     webapp_started = start_webapp()
     root = Tk()
     app = AttendanceApp(root)
-    if webapp_started:
-        app.status_var.set("System started; web app: " + " | ".join(webapp_access_urls()))
-    else:
-        app.status_var.set("System started; web app did not start")
+    app.status_var.set(webapp_status_message(webapp_started))
     root.mainloop()
 
 
