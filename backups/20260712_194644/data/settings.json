@@ -1,0 +1,15 @@
+{
+  "attendance_prompt": "System bell only",
+  "webapp_url": "http://174.138.37.29:8000",
+  "desktop_sync_token": "f0682c862f08e87344b56e4acc19cea769fa8de00592e5ae72b7dfb3ef76db7b",
+  "closed_dates": [
+    "2026-06-18"
+  ],
+  "email_provider": "smtp",
+  "smtp_host": "smtp-relay.brevo.com",
+  "smtp_port": "587",
+  "smtp_username": "b1b883001@smtp-brevo.com",
+  "smtp_password": "L2t8aA1yK0qIp4UJ",
+  "smtp_from": "EDUCATION4100@pititpas.com",
+  "smtp_tls": "1"
+}
